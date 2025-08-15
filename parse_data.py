@@ -36,11 +36,107 @@ def get_data(max_num_games, log_freq):
             exporter = chess.pgn.FileExporter(out_pgn)
             g.accept(exporter)
 
-def get_fens():
+def fen_to_wnn(fen):
     """
-        Converts a .pgn file named "games_f.pgn" into a JSON named "fen_evals.json"
+    Converts a FEN string into the more neural network-friendly WNN.
+    WNN contains information about every square and all blank squares are . (instead of numbers like 2 and 3 to indicate
+    2 or 3 blank squares), castling rights are condensed into one character (B instead of KQ for both), and en passant /
+    the 50 move rule are ignored for simplicity
+    """
+    fen_fields = fen.split()
+    wnn = []
+    for c in fen_fields[0]:
+        if c.isdigit():
+            for _ in range(int(c)):
+                wnn.append(".")
+        elif c != '/':
+            wnn.append(c)
+    wnn.append("-")
+    wnn.append(fen_fields[1]) # turn indicator
+    wnn.append("-")
+    def conv_castle(s_fen):
+        """
+        Helper function for the castling rights condenser
+        """
+        w_kingside = 'K' in s_fen
+        w_queenside = 'Q' in s_fen
+        b_kingside = 'k' in s_fen
+        b_queenside = 'q' in s_fen
+
+        if w_kingside and w_queenside:
+            white_code = 'B'
+        elif w_kingside:
+            white_code = 'K'
+        elif w_queenside:
+            white_code = 'Q'
+        else:
+            white_code = 'N'
+
+        if b_kingside and b_queenside:
+            black_code = 'b'
+        elif b_kingside:
+            black_code = 'k'
+        elif b_queenside:
+            black_code = 'q'
+        else:
+            black_code = 'n'
+
+        return white_code + black_code
+
+    wnn.append(conv_castle(fen_fields[2]))
+    return "".join(wnn)
+
+def wnn_to_fen(wnn):
+    """
+    Converts a WNN string back into a FEN string. (for testing purposes)
+    Ignores en passant and fifty-move rule (assumes 0 moves, no en passant)
+    """
+    board_part = wnn[:64]
+    turn = wnn[65]
+    castle_code = wnn[67:69]
+
+    fen_rows = []
+    for rank in range(8):
+        row = board_part[rank*8:(rank+1)*8]
+        fen_row = ""
+        empty_count = 0
+        for c in row:
+            if c == '.':
+                empty_count += 1
+            else:
+                if empty_count > 0:
+                    fen_row += str(empty_count)
+                    empty_count = 0
+                fen_row += c
+        if empty_count > 0:
+            fen_row += str(empty_count)
+        fen_rows.append(fen_row)
+    fen_board = "/".join(fen_rows)
+
+    def decode_castle(code):
+        w, b = code[0], code[1]
+        castle = ""
+        if w == 'B':
+            castle += 'KQ'
+        elif w == 'K':
+            castle += 'K'
+        elif w == 'Q':
+            castle += 'Q'
+        if b == 'b':
+            castle += 'kq'
+        elif b == 'k':
+            castle += 'k'
+        elif b == 'q':
+            castle += 'q'
+        return castle if castle else "-"
+    fen_castle = decode_castle(castle_code)
+    return f"{fen_board} {turn} {fen_castle} - 0 1"
+
+def get_evals():
+    """
+        Converts a .pgn file named "games_f.pgn" into a JSON named "evals.json"
         "fen_evals.json" contains a list of dictionaries containing every move from every game in
-        "games_f.pgn" corresponding to the Stockfish evaluation of that position (in centipawns)
+        "games_f.pgn" (as WNNs) corresponding to the Stockfish evaluation of that position (in centipawns)
     """
     fens = []
     mate_value = 10000
@@ -65,14 +161,12 @@ def get_fens():
                         elif eval_value < -mate_value:
                             eval_value = -mate_value
                     value = int(eval_value)
-                    fens.append((board.fen(), value))
+                    fens.append((fen_to_wnn(board.fen()), value))
                 board.push(node.move)
 
-    fens_dict = [{"fen": fen, "eval": eval_value} for fen, eval_value in fens]
+    fens_dict = [{"wnn": fen, "eval": eval_value} for fen, eval_value in fens]
     max_eval = max(fens_dict, key=lambda x: x["eval"])
     print(max_eval)
 
-    with open("fen_evals.json", "w", encoding="utf-8") as f:
+    with open("evals.json", "w", encoding="utf-8") as f:
         json.dump(fens_dict, f, ensure_ascii=False, indent=2)
-
-get_fens()
