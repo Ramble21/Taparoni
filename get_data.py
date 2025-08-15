@@ -6,6 +6,8 @@ def get_data(num_games, log_freq):
         i = 0
         while True:
             game = chess.pgn.read_game(pgn)
+            if game is None:
+                break
             has_eval = False
             for node in game.mainline():
                 comment = node.comment
@@ -17,12 +19,13 @@ def get_data(num_games, log_freq):
                 i += 1
                 if i % log_freq == 0:
                     print(f"{i} games processed")
-            if game is None or i == num_games:
+            if i == num_games:
                 break
+    print(f"{len(games)} games compiled!")
 
     with open("games_f.pgn", "w", encoding="utf-8") as out_pgn:
         for g in games:
             exporter = chess.pgn.FileExporter(out_pgn)
             g.accept(exporter)
 
-get_data(num_games=20, log_freq=10)
+get_data(num_games=1000, log_freq=10)
