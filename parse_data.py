@@ -40,7 +40,7 @@ def get_fens():
     """
         Converts a .pgn file named "games_f.pgn" into a JSON named "fen_evals.json"
         "fen_evals.json" contains a list of dictionaries containing every move from every game in
-        "games_f.pgn" corresponding to the Stockfish evaluation of that position
+        "games_f.pgn" corresponding to the Stockfish evaluation of that position (in centipawns)
     """
     fens = []
     mate_value = 10000
@@ -64,7 +64,8 @@ def get_fens():
                             eval_value = mate_value
                         elif eval_value < -mate_value:
                             eval_value = -mate_value
-                    fens.append((board.fen(), eval_value))
+                    value = int(eval_value)
+                    fens.append((board.fen(), value))
                 board.push(node.move)
 
     fens_dict = [{"fen": fen, "eval": eval_value} for fen, eval_value in fens]
@@ -73,3 +74,5 @@ def get_fens():
 
     with open("fen_evals.json", "w", encoding="utf-8") as f:
         json.dump(fens_dict, f, ensure_ascii=False, indent=2)
+
+get_fens()
