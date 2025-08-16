@@ -1,4 +1,4 @@
-# Data
-/data/games.pgn
-/data/games_f.pgn
-/data/evals.json
+# Data (exceeds Github's limits, often trial-specific)
+# games.pgn taken from https://database.lichess.org/, remaining files can be created
+# from scratch using the commands in parse_data.py
+/data/*

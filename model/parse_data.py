@@ -1,8 +1,9 @@
 import chess.pgn
-import torch
 import os
 import re
 import json
+from hyperparams import MAX_CENTIPAWNS
+
 
 def get_dataset():
     """
@@ -27,7 +28,7 @@ def get_data(max_num_games, log_freq):
     qualify.
     """
     games = []
-    with open("games.pgn") as pgn:
+    with open("../data/games.pgn") as pgn:
         i = 0
         while True:
             game = chess.pgn.read_game(pgn)
@@ -48,7 +49,7 @@ def get_data(max_num_games, log_freq):
                 break
     print(f"{len(games)} games compiled!")
 
-    with open("games_f.pgn", "w", encoding="utf-8") as out_pgn:
+    with open("../data/games_f.pgn", "w", encoding="utf-8") as out_pgn:
         for g in games:
             exporter = chess.pgn.FileExporter(out_pgn)
             g.accept(exporter)
@@ -156,9 +157,9 @@ def get_evals():
         "games_f.pgn" (as WNNs) corresponding to the Stockfish evaluation of that position (in centipawns)
     """
     fens = []
-    mate_value = 10000
+    mate_value = MAX_CENTIPAWNS
     eval_regex = re.compile(r"\[%eval ([^]]+)]")
-    with open("games_f.pgn") as pgn:
+    with open("../data/games_f.pgn") as pgn:
         while True:
             game = chess.pgn.read_game(pgn)
             if game is None:
@@ -185,5 +186,5 @@ def get_evals():
     max_eval = max(fens_dict, key=lambda x: x["eval"])
     print(max_eval)
 
-    with open("evals.json", "w", encoding="utf-8") as f:
+    with open("../data/evals.json", "w", encoding="utf-8") as f:
         json.dump(fens_dict, f, ensure_ascii=False, indent=2)

@@ -2,8 +2,6 @@ import torch.nn as nn
 from torch.nn import functional as F
 from hyperparams import *
 
-# THIS MODEL DOES NOT WORK YET!
-
 # Implementation module of a single head of self-attention: the basis of the transformer
 class Head(nn.Module):
 
@@ -22,7 +20,7 @@ class Head(nn.Module):
         q = self.query(batch) # (B, T, C)
         # Compute attention "affinities" following the formula in Attention Is All You Need
         w = q @ k.transpose(-2, -1) * (C ** -0.5) # (B, T, C) @ (B, C, T) -> (B, T, T), then multiply for unit gaussian normalization
-        w = F.softmax(w, dim=1) # Softmax to create full matrix
+        w = F.softmax(w, dim=-1) # Softmax to create full matrix
         w = self.dropout(w)
         v = self.value(batch) # (B, T, C)
         out = w @ v # (B, T, T) @ (B, T, C) -> (B, T, C)
@@ -47,7 +45,7 @@ class FeedForward(nn.Module):
         super().__init__()
         self.seq = nn.Sequential(
             nn.Linear(n_embd, 4 * n_embd),
-            nn.Tanh(),
+            nn.GELU(),
             nn.Linear(4 * n_embd, n_embd), # Linear projection
             nn.Dropout(DROPOUT)
         )
@@ -86,10 +84,9 @@ class Transformer(nn.Module):
         x = tok_emb + pos_emb # (B,T,C)
         x = self.blocks(x) # (B,T,C)
         x = self.ln_f(x) # (B,T,C)
-        x = self.lm_head(x) # (B,T,1)
-        preds = x.mean(dim=1) # (B*T, 1)
+        cls_token = x[:, 0, :] # (B,C)
+        preds = self.lm_head(cls_token)  # (B,1)
 
-        # If no targets are given, avoid an error by nulling loss
         if targets is None:
             loss = None
         else:
