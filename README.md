@@ -1,4 +1,4 @@
-Simple chess engine made from the ground up completely by me, for fun. WIP
+Simple chess engine made from the ground up completely by me, for fun. WIP, not complete yet
 
 More information about the model: <br>
 - Uses a custom-built Transformer to analyze positions, using Stockfish evaluations as references to train the model
