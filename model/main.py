@@ -1,9 +1,7 @@
-from parse_data import get_dataset, wnn_to_fen
+from parse_data import *
 from model import Transformer
 import matplotlib.pyplot as plt
 import random
-
-# Hyperparameters
 from hyperparams import *
 
 # Seed for consistent random numbers
@@ -53,7 +51,7 @@ def test_loss(model):
   print("Training loss: ", loss_t.item())
   print("Dev loss: ", loss_d.item())
 
-def sample(m, num_samples):
+def random_sample(m, num_samples):
   for i in range(num_samples):
 
     X_b, Y_b = get_batch('dev', 1)
@@ -65,6 +63,8 @@ def sample(m, num_samples):
     print(f"FEN: {wnn_to_fen(wnn)}")
     print(f"Prediction (pawns): {preds.view(-1).item() * 10}")
     print(f"Actual: {Y_b.view(-1).item() * 10}")
+    print(f"Next FEN d=1: {get_next_move(m, wnn_to_fen(wnn), 1)}")
+    print(f"Next FEN d=2: {get_next_move(m, wnn_to_fen(wnn), 2)}")
 
 def graph_loss(l_log, bucket_size):
   mean_calc = NUM_STEPS // bucket_size
@@ -87,11 +87,16 @@ def load_saved_weights():
 def save_model_weights(model):
   torch.save(model.state_dict(), "../data/saved_weights.pt")
 
+def eval_fen(fen, model):
+  model.eval()
+  wnn = fen_to_wnn(fen)
+  batch = torch.tensor(encode(wnn), dtype=torch.long)
+  batch = batch.view(1, -1)
+  preds, loss = model(batch)
+  return 10 * preds.item()
+
 def train(model):
-  # Pytorch optimizer object, used for training models in production
-  # torch.optim.SGD represents the classic stochastic gradient descent optimization, but AdamW is more advanced and popular
   optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
-  # Train our model
   loss_log = []
   for i in range(1, NUM_STEPS + 1):
     X_b, Y_b = get_batch('train', BATCH_SIZE)
@@ -111,16 +116,62 @@ def train(model):
   print("Training finished!")
   return loss_log
 
-# ---------------- Transformer ---------------------------------
+# --------------------Next Move Prediction---------------------- #
+
+def get_next_move(model, fen, depth):
+  legal_moves = get_legal_moves_as_fens(fen)
+  if not legal_moves:
+    return "NO LEGAL MOVES", 0.0
+  white_to_move = fen.split()[1] == 'w'
+  evals = [eval_fen(f, model) for f in legal_moves]
+  zipped = zip(legal_moves, evals)
+  if depth == 1:
+    best_fen, best_eval = max(zipped, key=lambda x: x[1]) if white_to_move else min(zipped, key=lambda x: x[1])
+  else:
+    scored_moves = []
+    for move in legal_moves:
+      _, score, _ = get_next_move(model, move, depth - 1)
+      scored_moves.append((move, score))
+    best_fen, best_eval = max(scored_moves, key=lambda x: x[1]) if white_to_move else min(scored_moves, key=lambda x: x[1])
+
+  # Convert FENs to a readable move for debugging
+  board = chess.Board(fen)
+  move_readable = "UNKNOWN"
+  for m in board.legal_moves:
+    board.push(m)
+    if board.fen() == best_fen:
+      move_readable = board.uci(m)
+      board.pop()
+      break
+    board.pop()
+
+  return best_fen, best_eval, move_readable
+
+def get_legal_moves_as_fens(fen):
+  board = chess.Board(fen)
+  moves = list(board.legal_moves)
+  fens = []
+  for move in moves:
+    board.push(move)
+    fens.append(board.fen())
+    board.pop()
+  return fens
+
+# --------------------- Transformer ----------------------------
+
 def new_model():
   m = load_new_model()
   log = train(m)
   test_loss(m)
   save_model_weights(m)
   graph_loss(log, LOSS_BENCH)
-  sample(m, NUM_SAMPLES)
+  random_sample(m, NUM_SAMPLES)
+  return m
 
 def load_old_model():
   m = load_saved_weights()
   test_loss(m)
-  sample(m, NUM_SAMPLES)
+  random_sample(m, NUM_SAMPLES)
+  return m
+
+load_old_model()
