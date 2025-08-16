@@ -1,6 +1,23 @@
 import chess.pgn
+import torch
+import os
 import re
 import json
+
+def get_dataset():
+    """
+    Retrieves information from "evals.json" in order to create the raw features and labels
+    Returns both features and labels in raw Python lists to later be turned into tensors
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(script_dir, "..", "data", "evals.json")
+
+    with open(file_path, 'r') as f:
+        data = json.load(f)
+
+    feature_list = [entry["wnn"] for entry in data]
+    label_list = [entry["eval"] for entry in data]
+    return feature_list, label_list
 
 def get_data(max_num_games, log_freq):
     """

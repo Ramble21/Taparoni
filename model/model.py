@@ -74,11 +74,10 @@ class Transformer(nn.Module):
     def __init__(self, vocab_size):
         super().__init__()
         self.token_emb_table = nn.Embedding(vocab_size, N_EMBD)
-        self.position_emb_table = nn.Embedding(CONTEXT_LEN, N_EMBD)
-        self.blocks = nn.Sequential(*[TransformerBlock() for _ in range(NUM_BLOCKS)]) # Python unpacking operator * converts entire list into one by one contents
+        self.position_emb_table = nn.Embedding(WNN_LEN, N_EMBD)
+        self.blocks = nn.Sequential(*[TransformerBlock() for _ in range(NUM_BLOCKS)])
         self.ln_f = nn.LayerNorm(N_EMBD)
         self.lm_head = nn.Linear(N_EMBD, 1)
-        self.tanh = nn.Tanh()
 
     def forward(self, batch, targets=None):
         B, T = batch.shape
@@ -87,27 +86,13 @@ class Transformer(nn.Module):
         x = tok_emb + pos_emb # (B,T,C)
         x = self.blocks(x) # (B,T,C)
         x = self.ln_f(x) # (B,T,C)
-        logits = self.lm_head(x) # (B,T,vocab_size)
+        x = self.lm_head(x) # (B,T,1)
+        preds = x.mean(dim=1) # (B*T, 1)
 
         # If no targets are given, avoid an error by nulling loss
         if targets is None:
             loss = None
         else:
-            B, T, C = logits.shape
-            # change shape of logits to match Pytorch specifications
-            logits = logits.view(B * T, C)
-            targets = targets.view(B * T)
-            loss = F.cross_entropy(logits, targets)
-        return logits, loss
-
-    def generate(self, index, max_new_tokens):
-        # batch is (B,T) array of indices in the current context
-        for i in range(max_new_tokens):
-            # crop context to the last block_size tokens
-            index_cond = index[:, -CONTEXT_LEN:]
-            logits, loss = self(index_cond)
-            logits = logits[:, -1, :]  # (B*T, C) -> (B, C)
-            probs = F.softmax(logits, dim=-1)
-            index_next = torch.multinomial(probs, num_samples=1)  # (B, 1)
-            index = torch.cat((index, index_next), dim=1)  # (B, T+1)
-        return index
+            loss_criterion = nn.L1Loss()
+            loss = loss_criterion(preds, targets)
+        return preds, loss
