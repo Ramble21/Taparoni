@@ -119,41 +119,40 @@ def train(model):
 # --------------------Next Move Prediction---------------------- #
 
 def get_next_move(fen, model, depth):
-  legal_moves = get_legal_moves_as_fens(fen)
+  legal_moves, legal_fens = get_legal_moves(fen)
   white_to_move = fen.split()[1] == 'w'
   if not legal_moves:
     raise RuntimeError("No legal moves!")
 
   if white_to_move:
     best_score = float('-inf')
-    best_move = None
-    for m in legal_moves:
-      score = minimax(m, model, depth-1, float('-inf'), float('inf'))
+    best_move, best_fen = None, None
+    for m,f in zip(legal_moves, legal_fens):
+      score = minimax(f, model, depth-1, float('-inf'), float('inf'))
       if score > best_score:
         best_score = score
-        best_move = m
-    return best_move
+        best_move, best_fen = m, f
+    return best_move, best_fen
   else:
     best_score = float('inf')
-    best_move = None
-    for m in legal_moves:
-      score = minimax(m, model, depth-1, float('-inf'), float('inf'))
+    best_move, best_fen = None, None
+    for m,f in zip(legal_moves, legal_fens):
+      score = minimax(f, model, depth-1, float('-inf'), float('inf'))
       if score < best_score:
         best_score = score
-        best_move = m
-    return best_move
-
+        best_move, best_fen = m, f
+    return best_move, best_fen
 
 def minimax(fen, model, depth, alpha, beta):
-  legal_moves = get_legal_moves_as_fens(fen)
+  legal_moves, legal_fens = get_legal_moves(fen)
   white_to_move = fen.split()[1] == 'w'
   if depth == 0 or not legal_moves:
     return eval_fen(fen, model)
 
   if white_to_move:
     best_value = float('-inf')
-    for m in legal_moves:
-      value = minimax(m, model, depth-1, alpha, beta)
+    for f in legal_fens:
+      value = minimax(f, model, depth-1, alpha, beta)
       best_value = max(value, best_value)
       alpha = max(alpha, value)
       if beta <= alpha:
@@ -161,15 +160,15 @@ def minimax(fen, model, depth, alpha, beta):
     return best_value
   else:
     best_value = float('inf')
-    for m in legal_moves:
-      value = minimax(m, model, depth-1, alpha, beta)
+    for f in legal_fens:
+      value = minimax(f, model, depth-1, alpha, beta)
       best_value = min(best_value, value)
       beta = min(beta, value)
       if beta <= alpha:
         break
     return best_value
 
-def get_legal_moves_as_fens(fen):
+def get_legal_moves(fen):
   board = chess.Board(fen)
   moves = list(board.legal_moves)
   fens = []
@@ -177,9 +176,9 @@ def get_legal_moves_as_fens(fen):
     board.push(move)
     fens.append(board.fen())
     board.pop()
-  return fens
+  return moves, fens
 
-# --------------------- Transformer ----------------------------
+# --------------------- Transformer --------------------------- #
 
 def new_model():
   m = load_new_model()
@@ -187,13 +186,10 @@ def new_model():
   test_loss(m)
   save_model_weights(m)
   graph_loss(log, LOSS_BENCH)
-  random_sample(m, NUM_SAMPLES)
   return m
 
 def load_old_model():
   m = load_saved_weights()
   test_loss(m)
-  random_sample(m, NUM_SAMPLES)
+  print()
   return m
-
-new_model()
