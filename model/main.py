@@ -63,8 +63,8 @@ def random_sample(m, num_samples):
     print(f"FEN: {wnn_to_fen(wnn)}")
     print(f"Prediction (pawns): {preds.view(-1).item() * 10}")
     print(f"Actual: {Y_b.view(-1).item() * 10}")
-    print(f"Next FEN d=1: {get_next_move(m, wnn_to_fen(wnn), 1)}")
-    print(f"Next FEN d=2: {get_next_move(m, wnn_to_fen(wnn), 2)}")
+    print(f"Next FEN d=1: {get_next_move(wnn_to_fen(wnn), m, 1)}")
+    print(f"Next FEN d=2: {get_next_move(wnn_to_fen(wnn), m, 2)}")
 
 def graph_loss(l_log, bucket_size):
   mean_calc = NUM_STEPS // bucket_size
@@ -118,34 +118,56 @@ def train(model):
 
 # --------------------Next Move Prediction---------------------- #
 
-def get_next_move(model, fen, depth):
+def get_next_move(fen, model, depth):
   legal_moves = get_legal_moves_as_fens(fen)
-  if not legal_moves:
-    return "NO LEGAL MOVES", 0.0
   white_to_move = fen.split()[1] == 'w'
-  evals = [eval_fen(f, model) for f in legal_moves]
-  zipped = zip(legal_moves, evals)
-  if depth == 1:
-    best_fen, best_eval = max(zipped, key=lambda x: x[1]) if white_to_move else min(zipped, key=lambda x: x[1])
+  if not legal_moves:
+    raise RuntimeError("No legal moves!")
+
+  if white_to_move:
+    best_score = float('-inf')
+    best_move = None
+    for m in legal_moves:
+      score = minimax(m, model, depth-1, float('-inf'), float('inf'))
+      if score > best_score:
+        best_score = score
+        best_move = m
+    return best_move
   else:
-    scored_moves = []
-    for move in legal_moves:
-      _, score, _ = get_next_move(model, move, depth - 1)
-      scored_moves.append((move, score))
-    best_fen, best_eval = max(scored_moves, key=lambda x: x[1]) if white_to_move else min(scored_moves, key=lambda x: x[1])
+    best_score = float('inf')
+    best_move = None
+    for m in legal_moves:
+      score = minimax(m, model, depth-1, float('-inf'), float('inf'))
+      if score < best_score:
+        best_score = score
+        best_move = m
+    return best_move
 
-  # Convert FENs to a readable move for debugging
-  board = chess.Board(fen)
-  move_readable = "UNKNOWN"
-  for m in board.legal_moves:
-    board.push(m)
-    if board.fen() == best_fen:
-      move_readable = board.uci(m)
-      board.pop()
-      break
-    board.pop()
 
-  return best_fen, best_eval, move_readable
+def minimax(fen, model, depth, alpha, beta):
+  legal_moves = get_legal_moves_as_fens(fen)
+  white_to_move = fen.split()[1] == 'w'
+  if depth == 0 or not legal_moves:
+    return eval_fen(fen, model)
+
+  if white_to_move:
+    best_value = float('-inf')
+    for m in legal_moves:
+      value = minimax(m, model, depth-1, alpha, beta)
+      best_value = max(value, best_value)
+      alpha = max(alpha, value)
+      if beta <= alpha:
+        break
+    return best_value
+  else:
+    best_value = float('inf')
+    for m in legal_moves:
+      value = minimax(m, model, depth-1, alpha, beta)
+      best_value = min(best_value, value)
+      beta = min(beta, value)
+      if beta <= alpha:
+        break
+    return best_value
 
 def get_legal_moves_as_fens(fen):
   board = chess.Board(fen)
@@ -174,4 +196,4 @@ def load_old_model():
   random_sample(m, NUM_SAMPLES)
   return m
 
-load_old_model()
+new_model()

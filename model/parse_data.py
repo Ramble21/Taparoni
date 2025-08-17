@@ -4,7 +4,6 @@ import re
 import json
 from hyperparams import MAX_CENTIPAWNS
 
-
 def get_dataset():
     """
     Retrieves information from "evals.json" in order to create the raw features and labels
@@ -188,3 +187,4 @@ def get_evals():
 
     with open("../data/evals.json", "w", encoding="utf-8") as f:
         json.dump(fens_dict, f, ensure_ascii=False, indent=2)
+
