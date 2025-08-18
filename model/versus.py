@@ -42,4 +42,5 @@ class Game:
         self.bot_move()
 
 m = load_old_model()
-Game(m)
+Game(m, bot_color='b', model_depth=2)
+# known bug: lots of errors are thrown when game ends as of now
