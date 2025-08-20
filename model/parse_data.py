@@ -68,9 +68,7 @@ def fen_to_wnn(fen):
                 wnn.append(".")
         elif c != '/':
             wnn.append(c)
-    wnn.append("-")
     wnn.append(fen_fields[1]) # turn indicator
-    wnn.append("-")
     def conv_castle(s_fen):
         """
         Helper function for the castling rights condenser
@@ -109,8 +107,8 @@ def wnn_to_fen(wnn):
     Ignores en passant and fifty-move rule (assumes 0 moves, no en passant)
     """
     board_part = wnn[:64]
-    turn = wnn[65]
-    castle_code = wnn[67:69]
+    turn = wnn[64]
+    castle_code = wnn[65:67]
 
     fen_rows = []
     for rank in range(8):
@@ -187,4 +185,3 @@ def get_evals():
 
     with open("../data/evals.json", "w", encoding="utf-8") as f:
         json.dump(fens_dict, f, ensure_ascii=False, indent=2)
-

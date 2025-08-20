@@ -1,7 +1,7 @@
 import torch
 
 # Hyperparameters
-WNN_LEN = 69 # length of a WNN string (nice)
+WNN_LEN = 67 # length of a WNN string
 BATCH_SIZE = 32 # number of sequences being processed by the transformer in parallel
 N_EMBD = 128 # number of embedding dimensions
 NUM_HEADS = 4 # number of heads in each multi-head attention module
