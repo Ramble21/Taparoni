@@ -18,6 +18,9 @@ class Game:
             self.prompt_player_move()
 
     def bot_move(self):
+        if self.board.is_game_over():
+            print("Game over! Result:", self.board.result())
+            return
         fen = self.board.fen()
         best_move, best_fen = get_next_move(fen=fen, model=self.model, depth=self.model_depth)
         san = self.board.san(best_move)
@@ -27,7 +30,9 @@ class Game:
         self.prompt_player_move()
 
     def prompt_player_move(self):
-        disclaimer = "Bot only accepts UCI notation (start square -> end square ex. d3d5, g1f3)"
+        if self.board.is_game_over():
+            print("Game over! Result: ", self.board.result())
+            return
         while True:
             user_input = input("Your move in UCI notation: ")
             try:
@@ -42,5 +47,4 @@ class Game:
         self.bot_move()
 
 m = load_old_model()
-Game(m, bot_color='b', model_depth=2)
-# known bug: lots of errors are thrown when game ends as of now
+Game(m, bot_color='w', model_depth=2)
