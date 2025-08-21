@@ -47,4 +47,4 @@ class Game:
         self.bot_move()
 
 m = load_old_model()
-Game(m, bot_color='w', model_depth=2)
+Game(m, bot_color='b', model_depth=2)

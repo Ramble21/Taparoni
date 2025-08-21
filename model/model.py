@@ -69,17 +69,20 @@ class Transformer(nn.Module):
     # The model itself
     def __init__(self, vocab_size):
         super().__init__()
-        self.token_emb_table = nn.Embedding(vocab_size, N_EMBD)
-        self.position_emb_table = nn.Embedding(WNN_LEN, N_EMBD)
+        self.piece_emb = nn.Embedding(7, N_EMBD) # 7 pieces -> r,n,b,q,k,p + empty
+        self.color_emb = nn.Embedding(3, N_EMBD) # 3 colors -> w,b + empty
+        self.ttm_emb = nn.Embedding(2, N_EMBD) # 2 potential turns to move -> w,b
+        self.square_emb = nn.Embedding(64, N_EMBD) # 64 squares on a chess board
+
         self.blocks = nn.Sequential(*[TransformerBlock() for _ in range(NUM_BLOCKS)])
         self.ln_f = nn.LayerNorm(N_EMBD)
         self.lm_head = nn.Linear(N_EMBD, 1)
 
-    def forward(self, batch, targets=None):
-        B, T = batch.shape
-        tok_emb = self.token_emb_table(batch) # (B,T,C)
-        pos_emb = self.position_emb_table(torch.arange(T, device=DEVICE)) # (T,C)
-        x = tok_emb + pos_emb # (B,T,C)
+    def forward(self, pieces_batch, colors_batch, ttm_batch, targets=None):
+        B, T = pieces_batch.shape
+        squares = torch.arange(T, device=DEVICE).unsqueeze(0).expand(B, T) # fixed code to generate the same board every time
+        x = self.piece_emb(pieces_batch) + self.color_emb(colors_batch) + self.ttm_emb(ttm_batch) + self.square_emb(squares) # (B, 64, C)
+
         x = self.blocks(x) # (B,T,C)
         x = self.ln_f(x) # (B,T,C)
         cls_token = x[:, 0, :] # (B,C)

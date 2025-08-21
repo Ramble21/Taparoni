@@ -13,6 +13,9 @@ torch.manual_seed(SEED)
 features_raw, labels_raw = get_dataset()
 print(f"Dataset size: {len(features_raw):,} FENs")
 
+# Convert centipawns into deca-pawns? (centipawns / 1000)
+labels_raw_deca = [x / 1000 for x in labels_raw]
+
 # Character-level tokenization
 chars = sorted(list({c for f in features_raw for c in f}))
 vocab_size = len(chars)
@@ -21,48 +24,80 @@ i_to_s = {i: ch for i, ch in enumerate(chars)}
 encode = lambda s: [s_to_i[c] for c in s]
 decode = lambda l: ''.join([i_to_s[i] for i in l])
 
-# Convert centipawns into deca-pawns? (centipawns / 1000)
-labels_raw_deca = [x / 1000 for x in labels_raw]
+# Piece tokenization
+piece_to_pi = {
+    '.': 0,                                         # empty square
+    'P': 1, 'N': 2, 'B': 3, 'R': 4, 'Q': 5, 'K': 6, # white pieces
+    'p': 1, 'n': 2, 'b': 3, 'r': 4, 'q': 5, 'k': 6  # black pieces
+}
+encode_pieces = lambda s: [piece_to_pi.get(p) for p in s]
+# Color tokenization
+piece_to_ci = {
+    '.': 0,                                         # empty square
+    'P': 1, 'N': 1, 'B': 1, 'R': 1, 'Q': 1, 'K': 1, # white pieces
+    'p': 2, 'n': 2, 'b': 2, 'r': 2, 'q': 2, 'k': 2  # black pieces
+}
+encode_colors = lambda s: [piece_to_ci.get(p) for p in s]
+# Turn to move tokenization
+encode_ttm = lambda c: [0] if c == 'w' else [1]
 
-features = torch.stack([torch.tensor(encode(f), dtype=torch.long) for f in features_raw])
+# Only encode first 64 characters of WNN that represent the board into piece and color features
+piece_features = torch.stack([torch.tensor(encode_pieces(f[:64]), dtype=torch.long) for f in features_raw])
+color_features = torch.stack([torch.tensor(encode_colors(f[:64]), dtype=torch.long) for f in features_raw])
+# Turn to move encoding (character 65 of a WNN string gives turn to move)
+ttm_features = torch.stack([torch.tensor(encode_ttm(f[65]), dtype=torch.long) for f in features_raw])
+
+
 labels = torch.tensor(labels_raw_deca, dtype=torch.float).unsqueeze(1)
 
-# 90% training, 10% dev
-n = int(0.9*len(features))
-features_tr =  features[:n]
-features_dev = features[n:]
-labels_tr = labels[:n]
-labels_dev = labels[n:]
+# Split into training and dev
+n = int(TRAINING_SIZE * len(piece_features))
+features_raw_tr, features_raw_dev = features_raw[:n], features_raw[n:]
+piece_features_tr, piece_features_dev = piece_features[:n], piece_features[n:]
+color_features_tr, color_features_dev = color_features[:n], color_features[n:]
+ttm_features_tr, ttm_features_dev = ttm_features[:n], ttm_features[n:]
+labels_tr, labels_dev = labels[:n], labels[n:]
 
-def get_batch(split, size):
-  features_x = features_tr if split == 'train' else features_dev
+def get_batch(split, size, return_wnns=False):
+  piece_features_x = piece_features_tr if split == 'train' else piece_features_dev
+  color_features_x = color_features_tr if split == 'train' else color_features_dev
+  ttm_features_x = ttm_features_tr if split == 'train' else ttm_features_dev
   labels_x = labels_tr if split == 'train' else labels_dev
-  index = torch.randint(len(features_x), (size, ))
-  x = torch.stack([features_x[i] for i in index])
-  y = torch.stack([labels_x[i] for i in index])
-  x, y = x.to(DEVICE), y.to(DEVICE)
-  return x, y
+
+  index = torch.randint(len(piece_features_x), (size, ))
+  pieces_batch = torch.stack([piece_features_x[i] for i in index])
+  colors_batch = torch.stack([color_features_x[i] for i in index])
+  ttm_batch = torch.stack([ttm_features_x[i] for i in index])
+  labels_batch = torch.stack([labels_x[i] for i in index])
+  pieces_batch, colors_batch, ttm_batch, labels_batch = pieces_batch.to(DEVICE), colors_batch.to(DEVICE), ttm_batch.to(DEVICE), labels_batch.to(DEVICE)
+
+  if return_wnns:
+    features_raw_x = features_raw_tr if split == 'train' else features_raw_dev
+    batch_wnns = torch.stack([features_raw_x[i] for i in index])
+    batch_wnns.to(DEVICE)
+    return pieces_batch, colors_batch, ttm_batch, labels_batch, batch_wnns
+
+  return pieces_batch, colors_batch, ttm_batch, labels_batch
 
 def test_loss(model):
-  X_t, Y_t = get_batch('train', BATCH_SIZE)
-  preds_t, loss_t = model(X_t, Y_t)
-  X_d, Y_d = get_batch('dev', BATCH_SIZE)
-  preds_d, loss_d = model(X_d, Y_d)
+  p_t, c_t, ttm_t, labels_t = get_batch('train', BATCH_SIZE)
+  preds_t, loss_t = model(p_t, c_t, ttm_t, targets=labels_t)
+  p_d, c_d, ttm_d, labels_d = get_batch('dev', BATCH_SIZE)
+  preds_d, loss_d = model(p_d, c_d, ttm_d, targets=labels_d)
   print("Training loss: ", loss_t.item())
   print("Dev loss: ", loss_d.item())
 
 def random_sample(m, num_samples):
   for i in range(num_samples):
-
-    X_b, Y_b = get_batch('dev', 1)
-    preds, loss = m(X_b, Y_b)
-    wnn = decode(X_b.view(-1).tolist())
+    p, c, ttm, l, wnns = get_batch('dev', 1, return_wnns=True)
+    preds, loss = m(p, c, ttm, l)
+    wnn = wnns.item()
     print()
     print("Sample", i)
     print(f"WNN: {wnn}")
     print(f"FEN: {wnn_to_fen(wnn)}")
     print(f"Prediction (pawns): {preds.view(-1).item() * 10}")
-    print(f"Actual: {Y_b.view(-1).item() * 10}")
+    print(f"Actual: {l.view(-1).item() * 10}")
     print(f"Next FEN d=1: {get_next_move(wnn_to_fen(wnn), m, 1)}")
     print(f"Next FEN d=2: {get_next_move(wnn_to_fen(wnn), m, 2)}")
 
@@ -90,18 +125,19 @@ def save_model_weights(model):
 def eval_fen(fen, model):
   model.eval()
   wnn = fen_to_wnn(fen)
-  batch = torch.tensor(encode(wnn), dtype=torch.long)
-  batch = batch.view(1, -1)
-  preds, loss = model(batch)
+  pieces = torch.tensor(encode_pieces(wnn[:64]), dtype=torch.long)
+  colors = torch.tensor(encode_colors(wnn[:64]), dtype=torch.long)
+  ttm = torch.tensor(encode_ttm(wnn[64]), dtype=torch.long)
+  preds, loss = model(pieces, colors, ttm)
   return 10 * preds.item()
 
 def train(model):
   optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
   loss_log = []
   for i in range(1, NUM_STEPS + 1):
-    X_b, Y_b = get_batch('train', BATCH_SIZE)
+    pieces_batch, colors_batch, ttm_batch, labels_batch = get_batch('train', BATCH_SIZE)
     # Forward pass
-    preds, loss = model(X_b, Y_b)
+    preds, loss = model(pieces_batch, colors_batch, ttm_batch, targets=labels_batch)
     # Backward pass
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
@@ -193,3 +229,5 @@ def load_old_model():
   test_loss(m)
   print()
   return m
+
+load_old_model()
