@@ -120,7 +120,7 @@ def random_sample(m, num_samples):
     print(f"Next FEN d=1: {get_next_move(wnn_to_fen(wnn), m, 1)}")
     print(f"Next FEN d=2: {get_next_move(wnn_to_fen(wnn), m, 2)}")
 
-def graph_loss(l_log, bucket_size, model_title="unknown"):
+def graph_loss(l_log, bucket_size, model_title="unknown", save_dir="../data/loss"):
   l_log_tensor = torch.tensor(l_log)
   num_steps = len(l_log_tensor)
   trunc_len = (num_steps // bucket_size) * bucket_size
@@ -129,14 +129,17 @@ def graph_loss(l_log, bucket_size, model_title="unknown"):
 
   plt.plot(loss_mean)
   plt.title(f"Loss benchmark graph for model \"{model_title}\"")
-  plt.show()
+
+  save_path = os.path.join(save_dir, f"loss_{model_title}.png")
+  plt.savefig(save_path)
+  plt.close()
 
 def eval_fen(fen, model):
   model.eval()
   wnn = fen_to_wnn(fen)
-  pieces = torch.tensor(encode_pieces(wnn[:64]), dtype=torch.long)
-  colors = torch.tensor(encode_colors(wnn[:64]), dtype=torch.long)
-  ttm = torch.tensor(encode_ttm(wnn[64]), dtype=torch.long)
+  pieces = torch.tensor(encode_pieces(wnn[:64]), dtype=torch.long, device=DEVICE)
+  colors = torch.tensor(encode_colors(wnn[:64]), dtype=torch.long, device=DEVICE)
+  ttm = torch.tensor(encode_ttm(wnn[64]), dtype=torch.long, device=DEVICE)
   preds, loss = model(pieces, colors, ttm)
   return 10 * preds.item()
 
@@ -176,6 +179,7 @@ def train(model, num_steps, model_type):
       keep_indices = [i for i, t in enumerate(pretrain_targets) if t is not None]
       index_tensor = torch.tensor(keep_indices, device=DEVICE, dtype=torch.long)
       index_f = torch.tensor([index_l[i] for i in range(len(index_l)) if i in keep_indices])
+      index_f.to(DEVICE)
 
       pretrain_targets_f = torch.tensor([pretrain_targets[i] for i in keep_indices]).to(DEVICE)
       pieces_batch_f = pieces_batch.index_select(0, index_tensor).to(DEVICE)
@@ -215,7 +219,7 @@ def load_saved_weights():
 def save_model_weights(model):
   torch.save(model.state_dict(), "../data/saved_weights.pt")
 
-def new_model():
+def train_new_model():
   m_body = TransformerBody().to(DEVICE)
   m_pretrain = TransformerPretrain(m_body, vocab_size).to(DEVICE)
   m_eval = TransformerEval(m_body).to(DEVICE)
@@ -240,4 +244,4 @@ def load_old_model():
 if __name__ == '__main__':
   print(f"Dataset size: {len(features_raw):,} FENs")
   print(f"{vocab_size} pre-train tokens")
-  load_old_model()
+  train_new_model()

@@ -18,7 +18,8 @@ class Head(nn.Module):
         k = self.key(batch) # (B,T,C)
         q = self.query(batch) # (B,T,C)
         # Compute attention "affinities" following the formula in Attention Is All You Need
-        w = q @ k.transpose(-2, -1) * (C ** -0.5) # (B,T,C) @ (B,C, ) -> (B,T,T), then multiply for unit gaussian normalization
+        head_size = q.size(-1)
+        w = q @ k.transpose(-2, -1) * (head_size ** -0.5) # (B,T,C) @ (B,C, ) -> (B,T,T), then multiply for unit gaussian normalization
         w = F.softmax(w, dim=-1) # Softmax to create full matrix
         w = self.dropout(w)
         v = self.value(batch) # (B,T,C)
@@ -116,6 +117,7 @@ class TransformerBody(nn.Module):
 
         self.blocks = nn.Sequential(*[TransformerBlock() for _ in range(NUM_BLOCKS)])
         self.ln_f = nn.LayerNorm(N_EMBD)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, N_EMBD))
 
     def forward(self, pieces_batch, colors_batch, ttm_batch):
         if pieces_batch.dim() == 1:
@@ -129,7 +131,12 @@ class TransformerBody(nn.Module):
                 self.color_emb(colors_batch) +
                 self.ttm_emb(ttm_batch) +
                 self.square_emb(squares)
-        ) # (B, 64, C)
+        ) # (B,64,C)
+
+        # CLS token
+        cls_tokens = self.cls_token.expand(B, -1, -1) # (B,1,C)
+        x = torch.cat([cls_tokens, x], dim=1) # (B,65,C) -> CLS token + 64 board square tokens
+
         x = self.blocks(x) # (B,T,C)
         x = self.ln_f(x) # (B,T,C)
         return x

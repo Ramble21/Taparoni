@@ -14,9 +14,9 @@ TRAINING_SIZE = 0.9 # amount of the dataset used in training vs dev, i.e 0.9 = 9
 NUM_SAMPLES = 5 # number of samples taken as a test after model training
 
 # Numbers used for model training
-NUM_STEPS_PRETRAIN = 10000 # number of steps used in model pretraining
-NUM_STEPS_FINETUNE = 10000 # number of steps used in model finetuning
-LOSS_BENCH = 100 # number of steps inbetween loss benchmarking prints during optimization
+NUM_STEPS_PRETRAIN = 130000 # number of steps used in model pretraining
+NUM_STEPS_FINETUNE = 70000 # number of steps used in model finetuning
+LOSS_BENCH = 10 # number of steps inbetween loss benchmarking prints during optimization
 
 # Misc
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu' # device used for computations
