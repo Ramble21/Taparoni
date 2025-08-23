@@ -11,9 +11,12 @@ LR = 3e-4 # learning rate parameter for optimization
 # Other various magic numbers
 MAX_CENTIPAWNS = 1000 # the maximum amount of centipawns used to determine "completely winning"
 TRAINING_SIZE = 0.9 # amount of the dataset used in training vs dev, i.e 0.9 = 90% training, 10% dev
-NUM_STEPS = 20000 # number of steps used in model training
 NUM_SAMPLES = 5 # number of samples taken as a test after model training
-LOSS_BENCH = 50 # number of steps inbetween loss benchmarking prints during optimization
+
+# Numbers used for model training
+NUM_STEPS_PRETRAIN = 10000 # number of steps used in model pretraining
+NUM_STEPS_FINETUNE = 10000 # number of steps used in model finetuning
+LOSS_BENCH = 100 # number of steps inbetween loss benchmarking prints during optimization
 
 # Misc
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu' # device used for computations

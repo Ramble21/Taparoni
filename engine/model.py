@@ -1,5 +1,6 @@
 import torch.nn as nn
 from torch.nn import functional as F
+
 from hyperparams import *
 
 # Implementation module of a single head of self-attention: the basis of the transformer
@@ -65,9 +66,48 @@ class TransformerBlock(nn.Module):
         batch = batch + self.ffwd(self.ln2(batch))
         return batch
 
-class Transformer(nn.Module):
+class TransformerPretrain(nn.Module):
+    def __init__(self, backbone, vocab_size):
+        super().__init__()
+        self.backbone = backbone
+        self.lm_head = nn.Linear(N_EMBD, vocab_size)
+
+    def forward(self, pieces_batch, colors_batch, ttm_batch, index, targets=None):
+        from main import get_legal_move_mask
+        from main import decode_moves
+        x = self.backbone(pieces_batch, colors_batch, ttm_batch) # (B,T,C)
+        cls_token = x[:, 0, :] # (B,C)
+        logits = self.lm_head(cls_token) # (B, vocab_size)
+        # Mask illegal moves
+        mask = get_legal_move_mask(index)
+        masked_logits = logits.masked_fill(~mask, float('-inf')).to(DEVICE)
+        if targets is None:
+            loss = None
+        else:
+            loss = F.cross_entropy(masked_logits, targets)
+        return masked_logits, loss
+
+class TransformerEval(nn.Module):
+    def __init__(self, backbone=None):
+        super().__init__()
+        self.backbone = TransformerBody() if backbone is None else backbone
+        self.eval_head = nn.Linear(N_EMBD, 1)
+
+    def forward(self, pieces_batch, colors_batch, ttm_batch, targets=None):
+        x = self.backbone(pieces_batch, colors_batch, ttm_batch) # (B,T,C)
+        cls_token = x[:, 0, :] # (B,C)
+        preds = self.eval_head(cls_token) # (B,1)
+
+        if targets is None:
+            loss = None
+        else:
+            loss_criterion = nn.L1Loss()
+            loss = loss_criterion(preds, targets)
+        return preds, loss
+
+class TransformerBody(nn.Module):
     # The model itself
-    def __init__(self, vocab_size):
+    def __init__(self):
         super().__init__()
         self.piece_emb = nn.Embedding(7, N_EMBD) # 7 pieces -> r,n,b,q,k,p + empty
         self.color_emb = nn.Embedding(3, N_EMBD) # 3 colors -> w,b + empty
@@ -76,21 +116,20 @@ class Transformer(nn.Module):
 
         self.blocks = nn.Sequential(*[TransformerBlock() for _ in range(NUM_BLOCKS)])
         self.ln_f = nn.LayerNorm(N_EMBD)
-        self.lm_head = nn.Linear(N_EMBD, 1)
 
-    def forward(self, pieces_batch, colors_batch, ttm_batch, targets=None):
+    def forward(self, pieces_batch, colors_batch, ttm_batch):
+        if pieces_batch.dim() == 1:
+            pieces_batch = pieces_batch.unsqueeze(0)
+            colors_batch = colors_batch.unsqueeze(0)
+            ttm_batch = ttm_batch.unsqueeze(0)
         B, T = pieces_batch.shape
         squares = torch.arange(T, device=DEVICE).unsqueeze(0).expand(B, T) # fixed code to generate the same board every time
-        x = self.piece_emb(pieces_batch) + self.color_emb(colors_batch) + self.ttm_emb(ttm_batch) + self.square_emb(squares) # (B, 64, C)
-
+        x = (
+                self.piece_emb(pieces_batch) +
+                self.color_emb(colors_batch) +
+                self.ttm_emb(ttm_batch) +
+                self.square_emb(squares)
+        ) # (B, 64, C)
         x = self.blocks(x) # (B,T,C)
         x = self.ln_f(x) # (B,T,C)
-        cls_token = x[:, 0, :] # (B,C)
-        preds = self.lm_head(cls_token)  # (B,1)
-
-        if targets is None:
-            loss = None
-        else:
-            loss_criterion = nn.L1Loss()
-            loss = loss_criterion(preds, targets)
-        return preds, loss
+        return x
