@@ -45,14 +45,14 @@ encode_colors = lambda s: [piece_to_ci.get(p) for p in s]
 # Turn to move tokenization
 encode_ttm = lambda c: [0] if c == 'w' else [1]
 
-path = '../data/dataset_encoded.pt'
-if os.path.exists(path):
-    saved = torch.load(path)
+dataset_path = '../data/dataset_encoded.pt'
+if os.path.exists(dataset_path):
+    saved = torch.load(dataset_path)
     piece_features = saved["piece_features"]
     color_features = saved["color_features"]
     ttm_features = saved["ttm_features"]
     labels = saved["labels"]
-    print(f"Loaded encoded tensors from {path}")
+    print(f"Loaded encoded tensors from {dataset_path}")
 else:
     # Only encode first 64 characters of WNN that represent the board into piece and color features
     piece_features = torch.stack([torch.tensor(encode_pieces(f[:64]), dtype=torch.long) for f in features_raw])
@@ -65,8 +65,8 @@ else:
         "color_features": color_features,
         "ttm_features": ttm_features,
         "labels": labels,
-    }, path)
-    print(f"Saved encoded tensors to {path}")
+    }, dataset_path)
+    print(f"Saved encoded tensors to {dataset_path}")
 
 # Split into training and dev
 n = int(TRAINING_SIZE * len(piece_features))
@@ -79,8 +79,9 @@ labels_tr, labels_dev = labels[:n], labels[n:]
 def get_batch(split, size, return_wnns=False, return_index=False):
     piece_features_x = piece_features_tr if split == 'train' else piece_features_dev
     color_features_x = color_features_tr if split == 'train' else color_features_dev
-    ttm_features_x = ttm_features_tr if split == 'train' else ttm_features_dev
-    labels_x = labels_tr if split == 'train' else labels_dev
+    ttm_features_x =   ttm_features_tr   if split == 'train' else ttm_features_dev
+    labels_x =         labels_tr         if split == 'train' else labels_dev
+    features_raw_x =   features_raw_tr   if split == 'train' else features_raw_dev
 
     index = torch.randint(len(piece_features_x), (size,))
     pieces_batch = torch.stack([piece_features_x[i.item()] for i in index])
@@ -92,7 +93,6 @@ def get_batch(split, size, return_wnns=False, return_index=False):
         DEVICE), ttm_batch.to(DEVICE), labels_batch.to(DEVICE)
 
     if return_wnns:
-        features_raw_x = features_raw_tr if split == 'train' else features_raw_dev
         batch_wnns = [features_raw_x[i.item()] for i in index]
         return pieces_batch, colors_batch, ttm_batch, labels_batch, batch_wnns
     elif return_index:
@@ -129,7 +129,7 @@ def random_sample(model, num_samples):
     for i in range(num_samples):
         p, c, ttm, l, wnns = get_batch('dev', 1, return_wnns=True)
         preds, loss = model(p, c, ttm, l)
-        wnn = wnns.item()
+        wnn = wnns[0]
         print()
         print("Sample", i)
         print(f"WNN: {wnn}")
@@ -263,7 +263,7 @@ def load_old_model():
     print()
     return m_eval
 
+# --------------- Transformer ---------------
 if __name__ == '__main__':
-    # --------------- Transformer ---------------
     m = load_old_model()
     random_sample(m, 5)
