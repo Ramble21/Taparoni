@@ -2,24 +2,35 @@ import chess.pgn
 import os
 import re
 import json
+import numpy as np
 from hyperparams import MAX_CENTIPAWNS
 
 def get_dataset():
     """
     Retrieves information from "evals.json" in order to create the raw features and labels
     Returns both features and labels in raw Python lists to later be turned into tensors
+    Saves created lists as a Numpy array file (.npz) to avoid recomputing in consecutive grabs
+    If data file contains these arrays saved as a Numpy file, retrieves directly from there instead
     """
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(script_dir, "..", "data", "evals.json")
+    path = '../data/dataset.npz'
+    if os.path.exists(path):
+        data = np.load(path, allow_pickle=True)
+        features = data['features'].tolist()
+        labels = data['labels'].tolist()
+        return features, labels
+    else:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        file_path = os.path.join(script_dir, "..", "data", "evals.json")
 
-    with open(file_path, 'r') as f:
-        data = json.load(f)
+        with open(file_path, 'r') as f:
+            data = json.load(f)
 
-    feature_list = [entry["wnn"] for entry in data]
-    label_list = [entry["eval"] for entry in data]
-    return feature_list, label_list
+        feature_list = [entry["wnn"] for entry in data]
+        label_list = [entry["eval"] for entry in data]
+        np.savez(path, features=feature_list, labels=label_list)
+        return feature_list, label_list
 
-def get_data(max_num_games, log_freq):
+def get_filtered_games(log_freq, max_num_games=None):
     """
     Converts a .pgn file named "games.pgn" taken from Lichess's database into a .pgn file named "games_f.pgn"
     "games_f.pgn" is a parsed version of the file that contains the first max_num_games in "games.pgn" that have
@@ -44,7 +55,7 @@ def get_data(max_num_games, log_freq):
                 i += 1
                 if i % log_freq == 0:
                     print(f"{i} games processed")
-            if i == max_num_games:
+            if max_num_games is not None and i == max_num_games:
                 break
     print(f"{len(games)} games compiled!")
 
@@ -147,7 +158,7 @@ def wnn_to_fen(wnn):
     fen_castle = decode_castle(castle_code)
     return f"{fen_board} {turn} {fen_castle} - 0 1"
 
-def get_evals():
+def get_evals_json():
     """
         Converts a .pgn file named "games_f.pgn" into a JSON named "evals.json"
         "fen_evals.json" contains a list of dictionaries containing every move from every game in
@@ -185,3 +196,6 @@ def get_evals():
 
     with open("../data/evals.json", "w", encoding="utf-8") as f:
         json.dump(fens_dict, f, ensure_ascii=False, indent=2)
+
+if __name__ == '__main__':
+    get_evals_json()
