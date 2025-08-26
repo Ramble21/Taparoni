@@ -2,3 +2,7 @@
 # games.pgn taken from https://database.lichess.org/, remaining files can be created
 # from scratch using the commands in parse_data.py
 /data/*
+
+# Other random gyatt that I need to gitignore
+__pycache__/
+*.py[cod]

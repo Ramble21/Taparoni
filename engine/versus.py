@@ -1,72 +1,109 @@
+import chess
+
 from main import *
+import chess.polyglot
 import random
 
-def get_next_move(fen, model, depth):
-  legal_moves, legal_fens = get_legal_moves(fen)
-  white_to_move = fen.split()[1] == 'w'
-  if not legal_moves:
-    raise RuntimeError("No legal moves!")
+def evaluate_position(fen, threefold_lookup, model):
+    board = chess.Board(fen)
+    key = chess.polyglot.zobrist_hash(board)
+    if board.is_checkmate():
+        return 100 if board.turn == chess.BLACK else -100
+    elif board.is_stalemate() or board.is_insufficient_material() or board.can_claim_fifty_moves() or threefold_lookup[key] >= 3:
+        return 0
+    else:
+        return eval_fen(fen, model)
 
-  if white_to_move:
-    best_score = float('-inf')
-    best_move, best_fen = None, None
-    for move, fen in zip(legal_moves, legal_fens):
-      score = minimax(fen, model, depth-1, float('-inf'), float('inf'))
-      if score > best_score:
-        best_score = score
-        best_move, best_fen = move, fen
-    return best_move, best_fen
-  else:
-    best_score = float('inf')
-    best_move, best_fen = None, None
-    for move, fen in zip(legal_moves, legal_fens):
-      score = minimax(fen, model, depth-1, float('-inf'), float('inf'))
-      if score < best_score:
-        best_score = score
-        best_move, best_fen = move, fen
-    return best_move, best_fen
+def get_next_move(board, model, depth):
 
-def minimax(fen, model, depth, alpha, beta):
-  legal_moves, legal_fens = get_legal_moves(fen)
-  white_to_move = fen.split()[1] == 'w'
-  if depth == 0 or not legal_moves:
-    return eval_fen(fen, model)
+    def init_lookup(final_board):
+        lookup = {}
+        temp_board = chess.Board()
+        for mv in final_board.move_stack:
+            temp_board.push(mv)
+            key = chess.polyglot.zobrist_hash(temp_board)
+            lookup[key] = lookup.get(key, 0) + 1
+        return lookup
 
-  if white_to_move:
-    best_value = float('-inf')
-    for f in legal_fens:
-      value = minimax(f, model, depth-1, alpha, beta)
-      best_value = max(value, best_value)
-      alpha = max(alpha, value)
-      if beta <= alpha:
-        break
-    return best_value
-  else:
-    best_value = float('inf')
-    for f in legal_fens:
-      value = minimax(f, model, depth-1, alpha, beta)
-      best_value = min(best_value, value)
-      beta = min(beta, value)
-      if beta <= alpha:
-        break
-    return best_value
+    fen = board.fen()
+    threefold_lookup = init_lookup(board)
+    score, move = minimax(fen, threefold_lookup, model, depth, float('-inf'), float('inf'))
+    return move
+
+def minimax(fen, threefold_lookup, model, depth, alpha, beta):
+
+    board = chess.Board(fen)
+    key = chess.polyglot.zobrist_hash(board)
+    threefold_lookup[key] = threefold_lookup.get(key, 0) + 1
+
+    if depth == 0 or board.is_game_over(claim_draw=True) or threefold_lookup[key] >= 3:
+        value = evaluate_position(fen, threefold_lookup, model)
+        threefold_lookup[key] -= 1
+        return value, None
+
+    legal_moves, legal_fens = get_legal_moves(fen)
+    white_to_move = fen.split()[1] == 'w'
+
+    if white_to_move:
+        best_value = float('-inf')
+        best_move = None
+        for i in range(len(legal_fens)):
+            mv, f = legal_moves[i], legal_fens[i]
+            value, _ = minimax(f, threefold_lookup, model, depth-1, alpha, beta)
+            if value > best_value:
+                best_value, best_move = value, mv
+            alpha = max(alpha, value)
+            if beta <= alpha:
+                break
+        return best_value, best_move
+    else:
+        best_value = float('inf')
+        best_move = None
+        for i in range(len(legal_fens)):
+            mv, f = legal_moves[i], legal_fens[i]
+            value, _ = minimax(f, threefold_lookup, model, depth-1, alpha, beta)
+            if value < best_value:
+                best_value, best_move = value, mv
+            beta = min(beta, value)
+            if beta <= alpha:
+                break
+        return best_value, best_move
 
 def get_legal_moves(fen):
-  board = chess.Board(fen)
-  moves = list(board.legal_moves)
-  fens = []
-  for move in moves:
-    board.push(move)
-    fens.append(board.fen())
-    board.pop()
-  return moves, fens
+
+    def classify_move(b, mv):
+        if b.gives_check(mv):
+            return "check"
+        elif b.is_capture(mv):
+            return "capture"
+        elif mv.promotion is not None:
+            return "promotion"
+        return "quiet"
+
+    priority_map = {
+        "check": 0,
+        "promotion": 1,
+        "capture": 2,
+        "quiet": 3
+    }
+
+    board = chess.Board(fen)
+    moves = list(board.legal_moves)
+    moves.sort(key=lambda mv: priority_map[classify_move(board, mv)])
+
+    fens = []
+    for move in moves:
+        board.push(move)
+        fens.append(board.fen())
+        board.pop()
+    return moves, fens
 
 class Game:
 
-    def __init__(self, model, bot_color=None, model_depth=1):
+    def __init__(self, model, bot_color=None, starting_position=None, model_depth=1):
         self.bot_color = 'w' if bot_color == 'w' else 'b' if bot_color == 'b' else random.choice('wb')
         self.player_color = 'b' if self.bot_color == 'w' else 'w'
-        self.board = chess.Board()
+        self.board = chess.Board() if starting_position is None else chess.Board(starting_position)
         self.white_to_move = True
         self.model_depth = model_depth
         self.model = model
@@ -81,8 +118,7 @@ class Game:
         if self.board.is_game_over():
             print("Game over! Result:", self.board.result())
             return
-        fen = self.board.fen()
-        best_move, best_fen = get_next_move(fen=fen, model=self.model, depth=self.model_depth)
+        best_move = get_next_move(self.board, model=self.model, depth=self.model_depth)
         san = self.board.san(best_move)
         self.board.push(best_move)
         response = f"Bot plays {san}. {"White" if self.player_color == 'w' else "Black"} to move."
@@ -108,4 +144,4 @@ class Game:
 
 if __name__ == '__main__':
     m = load_old_model()
-    Game(m, bot_color='b', model_depth=2)
+    Game(m, bot_color='m', model_depth=3)
