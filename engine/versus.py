@@ -144,4 +144,4 @@ class Game:
 
 if __name__ == '__main__':
     m = load_old_model()
-    Game(m, bot_color='m', model_depth=3)
+    Game(m, bot_color='w', model_depth=3)

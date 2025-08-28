@@ -5,6 +5,8 @@ import json
 import numpy as np
 from hyperparams import MAX_CENTIPAWNS
 
+eval_pattern = re.compile(r"\+?(-?\d+(?:\.\d+)?)(?=/)") # grabs the eval before "/" in a format such as +0.39/19 3.5s -> 0.39
+
 def get_dataset():
     """
     Retrieves information from "evals.json" in order to create the raw features and labels
@@ -30,34 +32,43 @@ def get_dataset():
         np.savez(path, features=feature_list, labels=label_list)
         return feature_list, label_list
 
-def get_filtered_games(log_freq, max_num_games=None):
+def get_filtered_games(log_freq, max_num_games=None, max_num_positions=None):
     """
-    Converts a .pgn file named "games.pgn" taken from Lichess's database into a .pgn file named "games_f.pgn"
+    Converts a .pgn file named "games.pgn" taken from Fishtest into a .pgn file named "games_f.pgn"
     "games_f.pgn" is a parsed version of the file that contains the first max_num_games in "games.pgn" that have
-    pre-installed Stockfish annotation. If there aren't max_num_games qualifying games, it will return all that do
-    qualify.
+    Stockfish annotations (evals inside comments like {+0.39/19 3.5s}).
     """
     games = []
-    with open("../data/games.pgn") as pgn:
+    total_positions = 0
+
+    with open("../data/games.pgn", encoding="utf-8") as pgn:
         i = 0
         while True:
             game = chess.pgn.read_game(pgn)
             if game is None:
                 break
             has_eval = False
+            num_positions = 0
             for node in game.mainline():
                 comment = node.comment
-                if "[%eval" in comment:
+                match = eval_pattern.search(comment)
+                if match:
+                    eval_value = float(match.group(1))
                     has_eval = True
-                    break
+                    num_positions += 1
+                    total_positions += 1
+                    node.eval = eval_value
             if has_eval:
                 games.append(game)
                 i += 1
                 if i % log_freq == 0:
-                    print(f"{i} games processed")
-            if max_num_games is not None and i == max_num_games:
+                    print(f"{i} games, {total_positions} positions processed")
+            if max_num_games is not None and i >= max_num_games:
                 break
-    print(f"{len(games)} games compiled!")
+            if max_num_positions is not None and total_positions >= max_num_positions:
+                break
+
+    print(f"{len(games)} games ({total_positions} positions) compiled!")
 
     with open("../data/games_f.pgn", "w", encoding="utf-8") as out_pgn:
         for g in games:
@@ -158,7 +169,7 @@ def wnn_to_fen(wnn):
     fen_castle = decode_castle(castle_code)
     return f"{fen_board} {turn} {fen_castle} - 0 1"
 
-def get_evals_json():
+def get_evals_json(log_freq):
     """
         Converts a .pgn file named "games_f.pgn" into a JSON named "evals.json"
         "fen_evals.json" contains a list of dictionaries containing every move from every game in
@@ -166,16 +177,20 @@ def get_evals_json():
     """
     fens = []
     mate_value = MAX_CENTIPAWNS
-    eval_regex = re.compile(r"\[%eval ([^]]+)]")
+
     with open("../data/games_f.pgn") as pgn:
+        i = 0
+        num_positions = 0
         while True:
+            i += 1
             game = chess.pgn.read_game(pgn)
             if game is None:
                 break
             board = game.board()
             for node in game.mainline():
-                match = eval_regex.search(node.comment)
+                match = eval_pattern.search(node.comment)
                 if match:
+                    num_positions += 1
                     eval_str = match.group(1)
                     if eval_str.startswith("#"):
                         mate_in = int(eval_str[1:])
@@ -189,6 +204,8 @@ def get_evals_json():
                     value = int(eval_value)
                     fens.append((fen_to_wnn(board.fen()), value))
                 board.push(node.move)
+            if i % log_freq == 0:
+                print(f"{i} games, {num_positions} positions successfully processed")
 
     fens_dict = [{"wnn": fen, "eval": eval_value} for fen, eval_value in fens]
     max_eval = max(fens_dict, key=lambda x: x["eval"])
@@ -198,4 +215,4 @@ def get_evals_json():
         json.dump(fens_dict, f, ensure_ascii=False, indent=2)
 
 if __name__ == '__main__':
-    get_evals_json()
+    get_evals_json(100)

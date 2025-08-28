@@ -18,5 +18,5 @@ NUM_STEPS_PRETRAIN = 130000 # number of steps used in model pretraining
 NUM_STEPS_FINETUNE = 70000 # number of steps used in model finetuning
 LOSS_BENCH = 250 # number of steps inbetween loss benchmarking prints during optimization
 
-# Misc
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu' # device used for computations
+# Pytorch device used for computations
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
