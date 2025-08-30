@@ -1,7 +1,8 @@
 from parse_data import *
-from model import TransformerBody, TransformerEval, TransformerPretrain
+from model import TwoHeadTransformer
 import matplotlib.pyplot as plt
 import random
+import math
 from hyperparams import *
 
 # Seed for consistent random numbers
@@ -76,7 +77,7 @@ color_features_tr, color_features_dev = color_features[:n], color_features[n:]
 ttm_features_tr, ttm_features_dev = ttm_features[:n], ttm_features[n:]
 labels_tr, labels_dev = labels[:n], labels[n:]
 
-def get_batch(split, size, return_wnns=False, return_index=False):
+def get_batch(split, size, return_wnns=False):
     piece_features_x = piece_features_tr if split == 'train' else piece_features_dev
     color_features_x = color_features_tr if split == 'train' else color_features_dev
     ttm_features_x =   ttm_features_tr   if split == 'train' else ttm_features_dev
@@ -94,13 +95,13 @@ def get_batch(split, size, return_wnns=False, return_index=False):
 
     if return_wnns:
         batch_wnns = [features_raw_x[i.item()] for i in index]
-        return pieces_batch, colors_batch, ttm_batch, labels_batch, batch_wnns
-    elif return_index:
-        return pieces_batch, colors_batch, ttm_batch, labels_batch, index
-    return pieces_batch, colors_batch, ttm_batch, labels_batch
+        return pieces_batch, colors_batch, ttm_batch, labels_batch, index, batch_wnns
+    return pieces_batch, colors_batch, ttm_batch, labels_batch, index
 
-def get_legal_move_mask(index):
-    wnns = [features_raw_tr[i] for i in index.tolist()]
+def get_wnns_for_lmm(index):
+    return [features_raw_tr[i] for i in index.tolist()]
+
+def get_legal_move_mask(wnns):
     fens = [wnn_to_fen(wnn) for wnn in wnns]
     masks = []
 
@@ -115,42 +116,35 @@ def get_legal_move_mask(index):
     result = torch.stack(masks, dim=0)  # (B, vocab_size)
     return result
 
-def test_loss(model):
-    p_t, c_t, ttm_t, labels_t = get_batch('train', BATCH_SIZE)
-    preds_t, loss_t = model(p_t, c_t, ttm_t, targets=labels_t)
-    p_d, c_d, ttm_d, labels_d = get_batch('dev', BATCH_SIZE)
-    preds_d, loss_d = model(p_d, c_d, ttm_d, targets=labels_d)
-    print("Training loss: ", loss_t.item())
-    print("Dev loss: ", loss_d.item())
+def test_loss(model, eval_weight):
+    p_t, c_t, ttm_t, eval_targets_t, ix_t = get_batch('train', BATCH_SIZE)
+    ix_l = ix_t.tolist()
+    pred_targets_t = [get_pred_target(i) for i in ix_l]
+    p_t, c_t, ttm_t, ix_f, pred_targets_t, eval_targets_t = remove_none_tensors(
+        p_t, c_t, ttm_t, ix_l, pred_targets_t, eval_targets_t)
+    loss_t = model(p_t, c_t, ttm_t, ix_f, eval_weight, pred_targets=pred_targets_t, eval_targets=eval_targets_t)
 
+    p_d, c_d, ttm_d, eval_targets_d, ix_d = get_batch('dev', BATCH_SIZE)
+    ix_l = ix_d.tolist()
+    pred_targets_d = [get_pred_target(i) for i in ix_l]
+    p_d, c_d, ttm_d, ix_f, pred_targets_d, eval_targets_d = remove_none_tensors(
+        p_d, c_d, ttm_d, ix_l, pred_targets_d, eval_targets_d)
+    loss_d = model(p_d, c_d, ttm_d, ix_f, eval_weight, pred_targets=pred_targets_d, eval_targets=eval_targets_d)
 
-def random_sample(model, num_samples):
-    from versus import get_next_move
-    for i in range(num_samples):
-        p, c, ttm, l, wnns = get_batch('dev', 1, return_wnns=True)
-        preds, loss = model(p, c, ttm, l)
-        wnn = wnns[0]
-        print()
-        print("Sample", i)
-        print(f"WNN: {wnn}")
-        print(f"FEN: {wnn_to_fen(wnn)}")
-        print(f"Prediction (pawns): {preds.view(-1).item() * 10}")
-        print(f"Actual: {l.view(-1).item() * 10}")
-        print(f"Next FEN d=1: {get_next_move(wnn_to_fen(wnn), model, 1)}")
-        print(f"Next FEN d=2: {get_next_move(wnn_to_fen(wnn), model, 2)}")
+    print(f"Training loss (eval_weight={eval_weight}): {loss_t.item()}")
+    print(f"Dev loss (eval_weight={eval_weight}): {loss_d.item()}")
 
-
-def graph_loss(l_log, bucket_size, model_title="unknown", save_dir="../data/loss"):
-    l_log_tensor = torch.tensor(l_log)
-    num_steps = len(l_log_tensor)
+def graph(log, bucket_size, graph_type="loss", model_title="unknown", save_dir="../data/loss"):
+    log_tensor = torch.tensor(log)
+    num_steps = len(log_tensor)
     trunc_len = (num_steps // bucket_size) * bucket_size
-    l_log_tensor = l_log_tensor[:trunc_len]
-    loss_mean = l_log_tensor.view(-1, bucket_size).mean(1)
+    log_tensor = log_tensor[:trunc_len]
+    loss_mean = log_tensor.view(-1, bucket_size).mean(1)
 
     plt.plot(loss_mean)
     plt.title(f"Loss benchmark graph for model \"{model_title}\"")
 
-    save_path = os.path.join(save_dir, f"loss_{model_title}.png")
+    save_path = os.path.join(save_dir, f"{graph_type}_{model_title}.png")
     plt.savefig(save_path)
     plt.close()
 
@@ -160,10 +154,23 @@ def eval_fen(fen, model):
     pieces = torch.tensor(encode_pieces(wnn[:64]), dtype=torch.long, device=DEVICE)
     colors = torch.tensor(encode_colors(wnn[:64]), dtype=torch.long, device=DEVICE)
     ttm = torch.tensor(encode_ttm(wnn[64]), dtype=torch.long, device=DEVICE)
-    preds, loss = model(pieces, colors, ttm)
-    return 10 * preds.item()
+    evaluation, pred_probs = model(pieces, colors, ttm, fen=fen, return_preds=True)
+    return 10 * evaluation.item(), pred_probs.squeeze(0).tolist()
 
-def get_pretrain_target(i):
+def remove_none_tensors(pieces_batch, colors_batch, ttm_batch, index_l, pred_targets, eval_targets):
+    keep_indices = [i for i, t in enumerate(pred_targets) if t is not None]
+    index_tensor = torch.tensor(keep_indices, device=DEVICE, dtype=torch.long)
+    index_f = torch.tensor([index_l[i] for i in range(len(index_l)) if i in keep_indices])
+    index_f.to(DEVICE)
+
+    pred_targets_f = torch.tensor([pred_targets[i] for i in keep_indices]).to(DEVICE)
+    eval_targets_f = (torch.tensor([eval_targets[i] for i in keep_indices]).to(DEVICE)).unsqueeze(1)
+    pieces_batch_f = pieces_batch.index_select(0, index_tensor).to(DEVICE)
+    colors_batch_f = colors_batch.index_select(0, index_tensor).to(DEVICE)
+    ttm_batch_f = ttm_batch.index_select(0, index_tensor).to(DEVICE)
+    return pieces_batch_f, colors_batch_f, ttm_batch_f, index_f, pred_targets_f, eval_targets_f
+
+def get_pred_target(i):
     def move_from_fens(fen_a, fen_b):
         board = chess.Board(fen_a)
         target = chess.Board(fen_b)
@@ -184,56 +191,45 @@ def get_pretrain_target(i):
         return None
     return move_to_i.get(move.uci())
 
-def train(model, num_steps, model_type):
+def train(model, num_steps, model_name='taparoni'):
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
     loss_log = []
+    weight_log = []
     for i in range(1, num_steps + 1):
-        pieces_batch, colors_batch, ttm_batch, labels_batch, index = get_batch('train', BATCH_SIZE, return_index=True)
+        pieces_batch, colors_batch, ttm_batch, eval_labels_batch, index = get_batch('train', BATCH_SIZE)
 
         # Forward pass
-        if model_type == 'pretrain':
-            index_l = index.tolist()
-            pretrain_targets = [get_pretrain_target(i) for i in index_l]
+        index_l = index.tolist()
+        pred_targets = [get_pred_target(i) for i in index_l]
 
-            # Remove None labels and their corresponding targets (positions with no next move)
-            keep_indices = [i for i, t in enumerate(pretrain_targets) if t is not None]
-            index_tensor = torch.tensor(keep_indices, device=DEVICE, dtype=torch.long)
-            index_f = torch.tensor([index_l[i] for i in range(len(index_l)) if i in keep_indices])
-            index_f.to(DEVICE)
+        # Remove None labels and their corresponding targets (positions with no next move)
+        pieces_batch_f, colors_batch_f, ttm_batch_f, index_f, pred_targets_f, eval_targets_f = remove_none_tensors(
+            pieces_batch, colors_batch, ttm_batch, index_l, pred_targets, eval_labels_batch)
 
-            pretrain_targets_f = torch.tensor([pretrain_targets[i] for i in keep_indices]).to(DEVICE)
-            pieces_batch_f = pieces_batch.index_select(0, index_tensor).to(DEVICE)
-            colors_batch_f = colors_batch.index_select(0, index_tensor).to(DEVICE)
-            ttm_batch_f = ttm_batch.index_select(0, index_tensor).to(DEVICE)
-
-            if len(pretrain_targets_f) == 0:
-                preds, loss = None, None
-            else:
-                preds, loss = model(pieces_batch_f, colors_batch_f, ttm_batch_f, index=index_f,
-                                    targets=pretrain_targets_f)
-        else:
-            preds, loss = model(pieces_batch, colors_batch, ttm_batch, targets=labels_batch)
-
-        if loss is not None:
+        if len(pred_targets_f) != 0:
+            progress = i / num_steps
+            current_eval_weight = MAX_FINETUNE_EVAL_WEIGHT * (0.5 - 0.5 * math.cos(math.pi * progress))
+            loss = model(pieces_batch_f, colors_batch_f, ttm_batch_f, index=index_f, eval_weight=current_eval_weight, pred_targets=pred_targets_f, eval_targets=eval_targets_f)
             # Backward pass
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
             # Log
             loss_log.append(loss.item())
+            weight_log.append(current_eval_weight)
             if i % LOSS_BENCH == 0:
                 recent_losses = loss_log[-LOSS_BENCH:]
                 approx_loss = sum(recent_losses) / len(recent_losses)
                 print(f"{i} / {num_steps}: bucket loss={approx_loss:.4f}")
 
     model.eval()
-    print(f"model.{model_type} training finished!")
-    return loss_log
+    print(f"model.{model_name} training finished!")
+    return weight_log, loss_log
 
 def load_saved_weights(path="../data/saved_weights.pt"):
     if not os.path.exists(path):
         raise RuntimeError(f"Path {path} doesn't exist!")
-    m_eval = TransformerEval()
+    m_eval = TwoHeadTransformer(vocab_size)
     m_eval.load_state_dict(torch.load(path))
     m_eval.to(DEVICE)
     m_eval.eval()
@@ -243,27 +239,23 @@ def save_model_weights(model, path="../data/saved_weights.pt"):
     torch.save(model.state_dict(), path)
 
 def train_new_model():
-    m_body = TransformerBody().to(DEVICE)
-    m_pretrain = TransformerPretrain(m_body, vocab_size).to(DEVICE)
-    m_eval = TransformerEval(m_body).to(DEVICE)
-
-    pretrain_log = train(m_pretrain, NUM_STEPS_PRETRAIN, 'pretrain')
-    graph_loss(pretrain_log, LOSS_BENCH, model_title="pretrain")
-    finetune_log = train(m_eval, NUM_STEPS_FINETUNE, 'finetune')
-    graph_loss(finetune_log, LOSS_BENCH, model_title="finetune")
+    model = TwoHeadTransformer(vocab_size).to(DEVICE)
+    _, pretrain_log = train(model, NUM_STEPS_PRETRAIN, model_name='pretrain')
+    graph(pretrain_log, LOSS_BENCH, graph_type='loss', model_title="pretrain")
+    weight_log, finetune_log = train(model, NUM_STEPS_FINETUNE, model_name='finetune')
+    graph(finetune_log, LOSS_BENCH, graph_type='loss', model_title="finetune")
+    graph(weight_log, LOSS_BENCH, graph_type='weight', model_title='finetune')
     print("All training finished!")
 
-    save_model_weights(m_eval)
-    test_loss(m_eval)
-    return m_eval
+    save_model_weights(model)
+    test_loss(model, MAX_FINETUNE_EVAL_WEIGHT)
+    return model
 
 def load_old_model():
     m_eval = load_saved_weights()
-    test_loss(m_eval)
-    print()
+    test_loss(m_eval, MAX_FINETUNE_EVAL_WEIGHT)
     return m_eval
 
 # --------------- Transformer ---------------
 if __name__ == '__main__':
-    m = load_old_model()
-    random_sample(m, 5)
+    m = train_new_model()

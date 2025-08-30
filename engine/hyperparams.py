@@ -14,8 +14,9 @@ TRAINING_SIZE = 0.9 # amount of the dataset used in training vs dev, i.e 0.9 = 9
 NUM_SAMPLES = 5 # number of samples taken as a test after model training
 
 # Numbers used for model training
-NUM_STEPS_PRETRAIN = 130000 # number of steps used in model pretraining
-NUM_STEPS_FINETUNE = 70000 # number of steps used in model finetuning
+NUM_STEPS_PRETRAIN = 140000 # number of steps used in model pretraining
+NUM_STEPS_FINETUNE = 60000 # number of steps used in model finetuning
+MAX_FINETUNE_EVAL_WEIGHT = 0.4 # maximum percentage of the total loss assigned to the evaluation model during finetuning
 LOSS_BENCH = 250 # number of steps inbetween loss benchmarking prints during optimization
 
 # Pytorch device used for computations

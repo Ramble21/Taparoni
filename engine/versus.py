@@ -1,6 +1,6 @@
 import chess
 
-from main import *
+from main import eval_fen, load_old_model, move_to_i
 import chess.polyglot
 import random
 
@@ -12,9 +12,10 @@ def evaluate_position(fen, threefold_lookup, model):
     elif board.is_stalemate() or board.is_insufficient_material() or board.can_claim_fifty_moves() or threefold_lookup[key] >= 3:
         return 0
     else:
-        return eval_fen(fen, model)
+        evaluation, _ = eval_fen(fen, model)
+        return evaluation
 
-def get_next_move(board, model, depth):
+def get_next_move(board, model, depth, max_lines):
 
     def init_lookup(final_board):
         lookup = {}
@@ -27,10 +28,10 @@ def get_next_move(board, model, depth):
 
     fen = board.fen()
     threefold_lookup = init_lookup(board)
-    score, move = minimax(fen, threefold_lookup, model, depth, float('-inf'), float('inf'))
+    score, move = minimax(fen, threefold_lookup, model, depth, max_lines, float('-inf'), float('inf'))
     return move
 
-def minimax(fen, threefold_lookup, model, depth, alpha, beta):
+def minimax(fen, threefold_lookup, model, depth, max_lines, alpha, beta):
 
     board = chess.Board(fen)
     key = chess.polyglot.zobrist_hash(board)
@@ -41,7 +42,7 @@ def minimax(fen, threefold_lookup, model, depth, alpha, beta):
         threefold_lookup[key] -= 1
         return value, None
 
-    legal_moves, legal_fens = get_legal_moves(fen)
+    legal_moves, legal_fens = get_legal_moves(fen, model, max_lines)
     white_to_move = fen.split()[1] == 'w'
 
     if white_to_move:
@@ -49,7 +50,7 @@ def minimax(fen, threefold_lookup, model, depth, alpha, beta):
         best_move = None
         for i in range(len(legal_fens)):
             mv, f = legal_moves[i], legal_fens[i]
-            value, _ = minimax(f, threefold_lookup, model, depth-1, alpha, beta)
+            value, _ = minimax(f, threefold_lookup, model, depth-1, max_lines, alpha, beta)
             if value > best_value:
                 best_value, best_move = value, mv
             alpha = max(alpha, value)
@@ -61,7 +62,7 @@ def minimax(fen, threefold_lookup, model, depth, alpha, beta):
         best_move = None
         for i in range(len(legal_fens)):
             mv, f = legal_moves[i], legal_fens[i]
-            value, _ = minimax(f, threefold_lookup, model, depth-1, alpha, beta)
+            value, _ = minimax(f, threefold_lookup, model, depth-1, max_lines, alpha, beta)
             if value < best_value:
                 best_value, best_move = value, mv
             beta = min(beta, value)
@@ -69,44 +70,30 @@ def minimax(fen, threefold_lookup, model, depth, alpha, beta):
                 break
         return best_value, best_move
 
-def get_legal_moves(fen):
-
-    def classify_move(b, mv):
-        if b.gives_check(mv):
-            return "check"
-        elif b.is_capture(mv):
-            return "capture"
-        elif mv.promotion is not None:
-            return "promotion"
-        return "quiet"
-
-    priority_map = {
-        "check": 0,
-        "promotion": 1,
-        "capture": 2,
-        "quiet": 3
-    }
-
+def get_legal_moves(fen, model, max_lines):
+    _, pred_probs = eval_fen(fen, model)
     board = chess.Board(fen)
     moves = list(board.legal_moves)
-    moves.sort(key=lambda mv: priority_map[classify_move(board, mv)])
-
+    moves.sort(key=lambda mv: pred_probs[move_to_i[mv.uci()]])
     fens = []
     for move in moves:
         board.push(move)
         fens.append(board.fen())
         board.pop()
-    return moves, fens
+    if max_lines is None:
+        return moves, fens
+    return moves[:max_lines], fens[:max_lines]
 
 class Game:
 
-    def __init__(self, model, bot_color=None, starting_position=None, model_depth=1):
+    def __init__(self, model, bot_color=None, starting_position=None, model_depth=1, max_lines=None):
         self.bot_color = 'w' if bot_color == 'w' else 'b' if bot_color == 'b' else random.choice('wb')
         self.player_color = 'b' if self.bot_color == 'w' else 'w'
         self.board = chess.Board() if starting_position is None else chess.Board(starting_position)
         self.white_to_move = True
         self.model_depth = model_depth
         self.model = model
+        self.max_lines = max_lines
         if self.bot_color == 'w':
             print("Bot is playing the white pieces, and will make the first move.")
             self.bot_move()
@@ -118,7 +105,7 @@ class Game:
         if self.board.is_game_over():
             print("Game over! Result:", self.board.result())
             return
-        best_move = get_next_move(self.board, model=self.model, depth=self.model_depth)
+        best_move = get_next_move(self.board, model=self.model, depth=self.model_depth, max_lines=self.max_lines)
         san = self.board.san(best_move)
         self.board.push(best_move)
         response = f"Bot plays {san}. {"White" if self.player_color == 'w' else "Black"} to move."
@@ -144,4 +131,4 @@ class Game:
 
 if __name__ == '__main__':
     m = load_old_model()
-    Game(m, bot_color='w', model_depth=3)
+    Game(m, bot_color='w', model_depth=5, max_lines=6)

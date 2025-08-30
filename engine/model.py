@@ -1,6 +1,6 @@
 import torch.nn as nn
 from torch.nn import functional as F
-
+from parse_data import fen_to_wnn
 from hyperparams import *
 
 # Implementation module of a single head of self-attention: the basis of the transformer
@@ -14,7 +14,6 @@ class Head(nn.Module):
         self.dropout = nn.Dropout(DROPOUT)
 
     def forward(self, batch):
-        B, T, C = batch.shape
         k = self.key(batch) # (B,T,C)
         q = self.query(batch) # (B,T,C)
         # Compute attention "affinities" following the formula in Attention Is All You Need
@@ -67,35 +66,59 @@ class TransformerBlock(nn.Module):
         batch = batch + self.ffwd(self.ln2(batch))
         return batch
 
-class TransformerPretrain(nn.Module):
-    def __init__(self, backbone, vocab_size):
+class TwoHeadTransformer(nn.Module):
+    def __init__(self, vocab_size):
         super().__init__()
-        self.backbone = backbone
+        self.backbone = TransformerBody()
+        self.prediction_head = PredictionHead(vocab_size)
+        self.evaluation_head = EvalHead()
+
+    def forward(self, pieces, colors, ttm, index=None, fen=None, eval_weight=0.5, pred_targets=None, eval_targets=None, return_preds=False):
+        x = self.backbone(pieces, colors, ttm)
+
+        zero = torch.tensor(0.0, device=DEVICE)
+        if eval_weight < 1:
+            pred_probs, pred_loss = self.prediction_head(x, index=index, targets=pred_targets) if index is not None else self.prediction_head(x, fen=fen, targets=pred_targets)
+        else:
+            pred_probs, pred_loss = None, zero
+        if eval_weight > 0:
+            evaluation, eval_loss = self.evaluation_head(x, eval_targets)
+        else:
+            evaluation, eval_loss = None, zero
+
+        if return_preds:
+            return evaluation, pred_probs
+        total_loss = (eval_weight * eval_loss) + ((1 - eval_weight) * pred_loss)
+        return total_loss
+
+class PredictionHead(nn.Module):
+    def __init__(self, vocab_size):
+        super().__init__()
         self.lm_head = nn.Linear(N_EMBD, vocab_size)
 
-    def forward(self, pieces_batch, colors_batch, ttm_batch, index, targets=None):
-        from main import get_legal_move_mask
-        from main import decode_moves
-        x = self.backbone(pieces_batch, colors_batch, ttm_batch) # (B,T,C)
+    def forward(self, x, index=None, fen=None, targets=None):
+        from main import get_legal_move_mask, get_wnns_for_lmm
+        # x -> (B,T,C), result of backbone.forward()
         cls_token = x[:, 0, :] # (B,C)
         logits = self.lm_head(cls_token) # (B, vocab_size)
         # Mask illegal moves
-        mask = get_legal_move_mask(index)
+        wnns = get_wnns_for_lmm(index) if index is not None else [fen_to_wnn(fen)]
+        mask = get_legal_move_mask(wnns)
         masked_logits = logits.masked_fill(~mask, float('-inf')).to(DEVICE)
+        probs = F.softmax(masked_logits, dim=1)
         if targets is None:
             loss = None
         else:
             loss = F.cross_entropy(masked_logits, targets)
-        return masked_logits, loss
+        return probs, loss
 
-class TransformerEval(nn.Module):
-    def __init__(self, backbone=None):
+class EvalHead(nn.Module):
+    def __init__(self):
         super().__init__()
-        self.backbone = TransformerBody() if backbone is None else backbone
         self.eval_head = nn.Linear(N_EMBD, 1)
 
-    def forward(self, pieces_batch, colors_batch, ttm_batch, targets=None):
-        x = self.backbone(pieces_batch, colors_batch, ttm_batch) # (B,T,C)
+    def forward(self, x, targets=None):
+        # x -> (B,T,C), result of backbone.forward()
         cls_token = x[:, 0, :] # (B,C)
         preds = self.eval_head(cls_token) # (B,1)
 
@@ -107,7 +130,7 @@ class TransformerEval(nn.Module):
         return preds, loss
 
 class TransformerBody(nn.Module):
-    # The model itself
+    # The body of the model itself
     def __init__(self):
         super().__init__()
         self.piece_emb = nn.Embedding(7, N_EMBD) # 7 pieces -> r,n,b,q,k,p + empty

@@ -5,7 +5,6 @@ import json
 import numpy as np
 from hyperparams import MAX_CENTIPAWNS
 
-eval_pattern = re.compile(r"\+?(-?\d+(?:\.\d+)?)(?=/)") # grabs the eval before "/" in a format such as +0.39/19 3.5s -> 0.39
 
 def get_dataset():
     """
@@ -32,48 +31,57 @@ def get_dataset():
         np.savez(path, features=feature_list, labels=label_list)
         return feature_list, label_list
 
-def get_filtered_games(log_freq, max_num_games=None, max_num_positions=None):
-    """
-    Converts a .pgn file named "games.pgn" taken from Fishtest into a .pgn file named "games_f.pgn"
-    "games_f.pgn" is a parsed version of the file that contains the first max_num_games in "games.pgn" that have
-    Stockfish annotations (evals inside comments like {+0.39/19 3.5s}).
-    """
-    games = []
+def get_filtered_games(log_freq=1000, max_games=None, max_positions=None,
+                    filter_elite=False, elite_filter_min=2100):
+    re_eval = re.compile(r"\[%eval")
+    re_white = re.compile(r'\[WhiteElo "(\d+)"]')
+    re_black = re.compile(r'\[BlackElo "(\d+)"]')
+    re_event = re.compile(r'\[Event "([^"]+)"]')
+    re_result = re.compile(r"(1-0|0-1|1/2-1/2|\*)")
+
     total_positions = 0
+    games_written = 0
+    buffer = []
 
-    with open("../data/games.pgn", encoding="utf-8") as pgn:
-        i = 0
-        while True:
-            game = chess.pgn.read_game(pgn)
-            if game is None:
-                break
-            has_eval = False
-            num_positions = 0
-            for node in game.mainline():
-                comment = node.comment
-                match = eval_pattern.search(comment)
-                if match:
-                    eval_value = float(match.group(1))
-                    has_eval = True
-                    num_positions += 1
-                    total_positions += 1
-                    node.eval = eval_value
-            if has_eval:
-                games.append(game)
-                i += 1
-                if i % log_freq == 0:
-                    print(f"{i} games, {total_positions} positions processed")
-            if max_num_games is not None and i >= max_num_games:
-                break
-            if max_num_positions is not None and total_positions >= max_num_positions:
-                break
+    with open("../data/games.pgn", encoding="utf-8") as f_in, open("../data/games_f.pgn", "w", encoding="utf-8") as f_out:
+        for line in f_in:
+            if line.strip() == "":
+                # blank line, but don’t decide yet, just store it
+                buffer.append(line)
+                continue
 
-    print(f"{len(games)} games ({total_positions} positions) compiled!")
+            buffer.append(line)
 
-    with open("../data/games_f.pgn", "w", encoding="utf-8") as out_pgn:
-        for g in games:
-            exporter = chess.pgn.FileExporter(out_pgn)
-            g.accept(exporter)
+            # If this line has the game result, we know the game ended
+            if re_result.search(line):
+                game_txt = "".join(buffer)
+                buffer.clear()
+
+                if filter_elite:
+                    m_white = re_white.search(game_txt)
+                    m_black = re_black.search(game_txt)
+                    white = int(m_white.group(1)) if m_white else 0
+                    black = int(m_black.group(1)) if m_black else 0
+                    event = re_event.search(game_txt)
+                    event = event.group(1).lower() if event else ""
+                    if white < elite_filter_min or black < elite_filter_min or "bullet" in event:
+                        continue
+
+                if re_eval.search(game_txt):
+                    pos_count = game_txt.count("[%eval")
+                    total_positions += pos_count
+                    games_written += 1
+                    f_out.write(game_txt + "\n\n")
+
+                    if games_written % log_freq == 0:
+                        print(f"{games_written} games, {total_positions} positions processed")
+
+                    if max_games and games_written >= max_games:
+                        break
+                    if max_positions and total_positions >= max_positions:
+                        break
+
+    print(f"{games_written} games ({total_positions} positions) compiled!")
 
 def fen_to_wnn(fen):
     """
@@ -177,20 +185,20 @@ def get_evals_json(log_freq):
     """
     fens = []
     mate_value = MAX_CENTIPAWNS
-
+    eval_regex = re.compile(r"\[%eval ([^]]+)]")
+    num_positions = 0
+    num_games = 0
     with open("../data/games_f.pgn") as pgn:
-        i = 0
-        num_positions = 0
         while True:
-            i += 1
             game = chess.pgn.read_game(pgn)
+            num_games += 1
             if game is None:
                 break
             board = game.board()
             for node in game.mainline():
-                match = eval_pattern.search(node.comment)
+                num_positions += 1
+                match = eval_regex.search(node.comment)
                 if match:
-                    num_positions += 1
                     eval_str = match.group(1)
                     if eval_str.startswith("#"):
                         mate_in = int(eval_str[1:])
@@ -204,15 +212,12 @@ def get_evals_json(log_freq):
                     value = int(eval_value)
                     fens.append((fen_to_wnn(board.fen()), value))
                 board.push(node.move)
-            if i % log_freq == 0:
-                print(f"{i} games, {num_positions} positions successfully processed")
+            if num_games % log_freq == 0:
+                print(f"{num_games} games processed ({num_positions} positions)")
 
     fens_dict = [{"wnn": fen, "eval": eval_value} for fen, eval_value in fens]
     max_eval = max(fens_dict, key=lambda x: x["eval"])
     print(max_eval)
 
     with open("../data/evals.json", "w", encoding="utf-8") as f:
-        json.dump(fens_dict, f, ensure_ascii=False, indent=2)
-
-if __name__ == '__main__':
-    get_evals_json(100)
+            json.dump(fens_dict, f, ensure_ascii=False, indent=2)
