@@ -72,9 +72,12 @@ def minimax(fen, threefold_lookup, model, depth, max_lines, alpha, beta):
 
 def get_legal_moves(fen, model, max_lines):
     _, pred_probs = eval_fen(fen, model)
+    white_to_move = fen.split()[1] == 'w'
     board = chess.Board(fen)
     moves = list(board.legal_moves)
     moves.sort(key=lambda mv: pred_probs[move_to_i[mv.uci()]])
+    if white_to_move:
+        moves.reverse()
     fens = []
     for move in moves:
         board.push(move)
@@ -131,4 +134,4 @@ class Game:
 
 if __name__ == '__main__':
     m = load_old_model()
-    Game(m, bot_color='w', model_depth=5, max_lines=6)
+    Game(m, bot_color='w', model_depth=4, max_lines=10)

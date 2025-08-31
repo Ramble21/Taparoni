@@ -67,10 +67,10 @@ class TransformerBlock(nn.Module):
         return batch
 
 class TwoHeadTransformer(nn.Module):
-    def __init__(self, vocab_size):
+    def __init__(self):
         super().__init__()
         self.backbone = TransformerBody()
-        self.prediction_head = PredictionHead(vocab_size)
+        self.prediction_head = PredictionHead()
         self.evaluation_head = EvalHead()
 
     def forward(self, pieces, colors, ttm, index=None, fen=None, eval_weight=0.5, pred_targets=None, eval_targets=None, return_preds=False):
@@ -92,15 +92,24 @@ class TwoHeadTransformer(nn.Module):
         return total_loss
 
 class PredictionHead(nn.Module):
-    def __init__(self, vocab_size):
+    def __init__(self):
         super().__init__()
-        self.lm_head = nn.Linear(N_EMBD, vocab_size)
+        self.pred_head = nn.Sequential(
+            # expects input of size (B,C,8,8)
+            nn.Conv2d(N_EMBD, CONV_CHANNELS, kernel_size=1),
+            nn.ReLU(),
+            nn.Conv2d(CONV_CHANNELS, CONV_CHANNELS, kernel_size=KERNEL_SIZE, padding=KERNEL_SIZE // 2),
+            nn.Conv2d(CONV_CHANNELS, NUM_PLANES, kernel_size=1)
+        )
 
     def forward(self, x, index=None, fen=None, targets=None):
         from main import get_legal_move_mask, get_wnns_for_lmm
-        # x -> (B,T,C), result of backbone.forward()
-        cls_token = x[:, 0, :] # (B,C)
-        logits = self.lm_head(cls_token) # (B, vocab_size)
+        # x -> (B,65,C), result of backbone.forward()
+        board_tokens = x[:, 1:, :] # get rid of CLS token -> (B,64,C)
+        board_tokens = board_tokens.view(-1, 8, 8, N_EMBD) # (B,8,8,C)
+        board_tokens = board_tokens.permute(0, 3, 1, 2) # (B,C,8,8)
+        logits = self.pred_head(board_tokens) # (B,NUM_PLANES,8,8)
+
         # Mask illegal moves
         wnns = get_wnns_for_lmm(index) if index is not None else [fen_to_wnn(fen)]
         mask = get_legal_move_mask(wnns)

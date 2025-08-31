@@ -1,3 +1,5 @@
+import chess
+
 from parse_data import *
 from model import TwoHeadTransformer
 import matplotlib.pyplot as plt
@@ -59,7 +61,7 @@ else:
     piece_features = torch.stack([torch.tensor(encode_pieces(f[:64]), dtype=torch.long) for f in features_raw])
     color_features = torch.stack([torch.tensor(encode_colors(f[:64]), dtype=torch.long) for f in features_raw])
     # Turn to move encoding (character 65 of a WNN string gives turn to move)
-    ttm_features = torch.stack([torch.tensor(encode_ttm(f[65]), dtype=torch.long) for f in features_raw])
+    ttm_features = torch.stack([torch.tensor(encode_ttm(f[64]), dtype=torch.long) for f in features_raw])
     labels = torch.tensor(labels_raw_deca, dtype=torch.float).unsqueeze(1)
     torch.save({
         "piece_features": piece_features,
@@ -83,7 +85,6 @@ def get_batch(split, size, return_wnns=False):
     ttm_features_x =   ttm_features_tr   if split == 'train' else ttm_features_dev
     labels_x =         labels_tr         if split == 'train' else labels_dev
     features_raw_x =   features_raw_tr   if split == 'train' else features_raw_dev
-
     index = torch.randint(len(piece_features_x), (size,))
     pieces_batch = torch.stack([piece_features_x[i.item()] for i in index])
     colors_batch = torch.stack([color_features_x[i.item()] for i in index])
@@ -101,38 +102,46 @@ def get_batch(split, size, return_wnns=False):
 def get_wnns_for_lmm(index):
     return [features_raw_tr[i] for i in index.tolist()]
 
+
 def get_legal_move_mask(wnns):
     fens = [wnn_to_fen(wnn) for wnn in wnns]
     masks = []
+    from utils import move_to_plane
 
-    for i in range(len(fens)):
-        fen = fens[i]
+    for fen in fens:
         board = chess.Board(fen)
-        ucis = [move.uci() for move in board.legal_moves]
-        encoded = [move_to_i.get(uci) for uci in ucis]
-        mask = torch.full((vocab_size,), False, device=DEVICE)
-        mask[encoded] = True
+        mask = torch.zeros((NUM_PLANES, 8, 8), dtype=torch.bool, device=DEVICE)
+        for move in board.legal_moves:
+            uci = move.uci()
+            from_sq = chess.parse_square(uci[:2]) # board square encoded as 0-63
+            fs_x, fs_y = from_sq % 8, from_sq // 8 # row and column encoded as 0-7
+            plane = move_to_plane(move, board) # encode raw move into AlphaZero move plane
+            mask[plane, fs_y, fs_x] = True
         masks.append(mask)
-    result = torch.stack(masks, dim=0)  # (B, vocab_size)
-    return result
+    return torch.stack(masks, dim=0)
 
 def test_loss(model, eval_weight):
-    p_t, c_t, ttm_t, eval_targets_t, ix_t = get_batch('train', BATCH_SIZE)
-    ix_l = ix_t.tolist()
-    pred_targets_t = [get_pred_target(i) for i in ix_l]
-    p_t, c_t, ttm_t, ix_f, pred_targets_t, eval_targets_t = remove_none_tensors(
-        p_t, c_t, ttm_t, ix_l, pred_targets_t, eval_targets_t)
-    loss_t = model(p_t, c_t, ttm_t, ix_f, eval_weight, pred_targets=pred_targets_t, eval_targets=eval_targets_t)
+    with torch.no_grad():
+        p_t, c_t, ttm_t, eval_targets_t, ix_t = get_batch('train', BATCH_SIZE)
+        ix_l = ix_t.tolist()
+        pred_targets_t = [get_pred_target_raw(i) for i in ix_l]
+        ttm_list_t = ttm_t.tolist()
+        pred_labels_t = get_pred_labels(pred_targets_t, ttm_list_t)
+        p_t, c_t, ttm_t, ix_f, pred_labels_t, eval_targets_t = remove_none_tensors(
+            p_t, c_t, ttm_t, ix_l, pred_labels_t, eval_targets_t)
+        loss_t = model(p_t, c_t, ttm_t, ix_f, eval_weight, pred_targets=pred_labels_t, eval_targets=eval_targets_t)
 
-    p_d, c_d, ttm_d, eval_targets_d, ix_d = get_batch('dev', BATCH_SIZE)
-    ix_l = ix_d.tolist()
-    pred_targets_d = [get_pred_target(i) for i in ix_l]
-    p_d, c_d, ttm_d, ix_f, pred_targets_d, eval_targets_d = remove_none_tensors(
-        p_d, c_d, ttm_d, ix_l, pred_targets_d, eval_targets_d)
-    loss_d = model(p_d, c_d, ttm_d, ix_f, eval_weight, pred_targets=pred_targets_d, eval_targets=eval_targets_d)
+        p_d, c_d, ttm_d, eval_targets_d, ix_d = get_batch('dev', BATCH_SIZE)
+        ix_l = ix_d.tolist()
+        pred_targets_d = [get_pred_target_raw(i) for i in ix_l]
+        ttm_list_d = ttm_d.tolist()
+        pred_labels_d = get_pred_labels(pred_targets_d, ttm_list_d)
+        p_d, c_d, ttm_d, ix_f, pred_targets_d, eval_targets_d = remove_none_tensors(
+            p_d, c_d, ttm_d, ix_l, pred_labels_d, eval_targets_d)
+        loss_d = model(p_d, c_d, ttm_d, ix_f, eval_weight, pred_targets=pred_labels_d, eval_targets=eval_targets_d)
 
-    print(f"Training loss (eval_weight={eval_weight}): {loss_t.item()}")
-    print(f"Dev loss (eval_weight={eval_weight}): {loss_d.item()}")
+        print(f"Training loss (eval_weight={eval_weight}): {loss_t.item()}")
+        print(f"Dev loss (eval_weight={eval_weight}): {loss_d.item()}")
 
 def graph(log, bucket_size, graph_type="loss", model_title="unknown", save_dir="../data/loss"):
     log_tensor = torch.tensor(log)
@@ -142,7 +151,7 @@ def graph(log, bucket_size, graph_type="loss", model_title="unknown", save_dir="
     loss_mean = log_tensor.view(-1, bucket_size).mean(1)
 
     plt.plot(loss_mean)
-    plt.title(f"Loss benchmark graph for model \"{model_title}\"")
+    plt.title(f"{graph_type.capitalize()} benchmark graph for model \"{model_title}\"")
 
     save_path = os.path.join(save_dir, f"{graph_type}_{model_title}.png")
     plt.savefig(save_path)
@@ -163,14 +172,14 @@ def remove_none_tensors(pieces_batch, colors_batch, ttm_batch, index_l, pred_tar
     index_f = torch.tensor([index_l[i] for i in range(len(index_l)) if i in keep_indices])
     index_f.to(DEVICE)
 
-    pred_targets_f = torch.tensor([pred_targets[i] for i in keep_indices]).to(DEVICE)
+    pred_targets_f = pred_targets[keep_indices].to(DEVICE)
     eval_targets_f = (torch.tensor([eval_targets[i] for i in keep_indices]).to(DEVICE)).unsqueeze(1)
     pieces_batch_f = pieces_batch.index_select(0, index_tensor).to(DEVICE)
     colors_batch_f = colors_batch.index_select(0, index_tensor).to(DEVICE)
     ttm_batch_f = ttm_batch.index_select(0, index_tensor).to(DEVICE)
     return pieces_batch_f, colors_batch_f, ttm_batch_f, index_f, pred_targets_f, eval_targets_f
 
-def get_pred_target(i):
+def get_pred_target_raw(i):
     def move_from_fens(fen_a, fen_b):
         board = chess.Board(fen_a)
         target = chess.Board(fen_b)
@@ -189,7 +198,20 @@ def get_pred_target(i):
     move = move_from_fens(fen1, fen2)
     if move is None:
         return None
-    return move_to_i.get(move.uci())
+    return move.uci()
+
+def get_pred_labels(pred_targets_raw, ttm_list):
+    pred_labels = torch.zeros((BATCH_SIZE, NUM_PLANES, 8, 8), device=DEVICE)
+    from utils import move_to_plane
+    for b, (uci, ttm) in enumerate(zip(pred_targets_raw, ttm_list)):
+        if uci is not None:
+            white_to_move = ttm == 0
+            move = chess.Move.from_uci(uci)
+            from_sq = move.from_square
+            plane = move_to_plane(move, white_to_move)
+            fx, fy = chess.square_file(from_sq), chess.square_rank(from_sq)
+            pred_labels[b, plane, fy, fx] = 1
+    return pred_labels
 
 def train(model, num_steps, model_name='taparoni'):
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
@@ -200,11 +222,13 @@ def train(model, num_steps, model_name='taparoni'):
 
         # Forward pass
         index_l = index.tolist()
-        pred_targets = [get_pred_target(i) for i in index_l]
+        pred_targets_raw = [get_pred_target_raw(i) for i in index_l]
+        ttm_list = ttm_batch.tolist()
+        pred_labels = get_pred_labels(pred_targets_raw, ttm_list)
 
         # Remove None labels and their corresponding targets (positions with no next move)
         pieces_batch_f, colors_batch_f, ttm_batch_f, index_f, pred_targets_f, eval_targets_f = remove_none_tensors(
-            pieces_batch, colors_batch, ttm_batch, index_l, pred_targets, eval_labels_batch)
+            pieces_batch, colors_batch, ttm_batch, index_l, pred_labels, eval_labels_batch)
 
         if len(pred_targets_f) != 0:
             progress = i / num_steps
@@ -229,7 +253,7 @@ def train(model, num_steps, model_name='taparoni'):
 def load_saved_weights(path="../data/saved_weights.pt"):
     if not os.path.exists(path):
         raise RuntimeError(f"Path {path} doesn't exist!")
-    m_eval = TwoHeadTransformer(vocab_size)
+    m_eval = TwoHeadTransformer()
     m_eval.load_state_dict(torch.load(path))
     m_eval.to(DEVICE)
     m_eval.eval()
@@ -239,7 +263,7 @@ def save_model_weights(model, path="../data/saved_weights.pt"):
     torch.save(model.state_dict(), path)
 
 def train_new_model():
-    model = TwoHeadTransformer(vocab_size).to(DEVICE)
+    model = TwoHeadTransformer().to(DEVICE)
     _, pretrain_log = train(model, NUM_STEPS_PRETRAIN, model_name='pretrain')
     graph(pretrain_log, LOSS_BENCH, graph_type='loss', model_title="pretrain")
     weight_log, finetune_log = train(model, NUM_STEPS_FINETUNE, model_name='finetune')

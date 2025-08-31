@@ -6,9 +6,8 @@ More information about the model: <br>
 - Trained on public data from https://database.lichess.org/ 
 
 Current model stats:
-- Games trained on: 175,033
-- Positions trained on: 12,082,774
-- Finetuning L1 loss: 0.1015
+- Games trained on: 24,592, min Elo of 2100
+- Positions trained on: 2,000,014
 
 More capabilities coming soon <br>
 Some more documentation on the building of the model: https://lichess.org/study/20AlyXhA
