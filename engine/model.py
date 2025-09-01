@@ -1,3 +1,4 @@
+import chess
 import torch.nn as nn
 from torch.nn import functional as F
 from parse_data import fen_to_wnn
@@ -73,53 +74,61 @@ class TwoHeadTransformer(nn.Module):
         self.prediction_head = PredictionHead()
         self.evaluation_head = EvalHead()
 
-    def forward(self, pieces, colors, ttm, index=None, fen=None, eval_weight=0.5, pred_targets=None, eval_targets=None, return_preds=False):
+    def forward(self, pieces, colors, ttm, index=None, fen=None, eval_weight=0.5, pred_targets_to=None, pred_targets_from=None, eval_targets=None, return_preds=False, split='train'):
         x = self.backbone(pieces, colors, ttm)
 
         zero = torch.tensor(0.0, device=DEVICE)
         if eval_weight < 1:
-            pred_probs, pred_loss = self.prediction_head(x, index=index, targets=pred_targets) if index is not None else self.prediction_head(x, fen=fen, targets=pred_targets)
+            if index is not None:
+                pred_probs_to, pred_probs_from, pred_loss = self.prediction_head(x, index=index, to_targets=pred_targets_to, from_targets=pred_targets_from, split=split)
+            else:
+                pred_probs_to, pred_probs_from, pred_loss = self.prediction_head(x, fen=fen, to_targets=pred_targets_to, from_targets=pred_targets_from, split=split)
         else:
-            pred_probs, pred_loss = None, zero
+            pred_probs_to, pred_probs_from, pred_loss = None, None, zero
         if eval_weight > 0:
             evaluation, eval_loss = self.evaluation_head(x, eval_targets)
         else:
             evaluation, eval_loss = None, zero
 
         if return_preds:
-            return evaluation, pred_probs
+            return evaluation, pred_probs_to, pred_probs_from
         total_loss = (eval_weight * eval_loss) + ((1 - eval_weight) * pred_loss)
         return total_loss
 
 class PredictionHead(nn.Module):
     def __init__(self):
         super().__init__()
-        self.pred_head = nn.Sequential(
-            # expects input of size (B,C,8,8)
-            nn.Conv2d(N_EMBD, CONV_CHANNELS, kernel_size=1),
-            nn.ReLU(),
-            nn.Conv2d(CONV_CHANNELS, CONV_CHANNELS, kernel_size=KERNEL_SIZE, padding=KERNEL_SIZE // 2),
-            nn.Conv2d(CONV_CHANNELS, NUM_PLANES, kernel_size=1)
-        )
+        self.to_move_head = nn.Linear(N_EMBD * 64, 64)
+        self.from_move_head = nn.Linear(N_EMBD * 64, 64)
 
-    def forward(self, x, index=None, fen=None, targets=None):
-        from main import get_legal_move_mask, get_wnns_for_lmm
+    def forward(self, x, index=None, fen=None, to_targets=None, from_targets=None, split='train'):
+        from main import get_legal_move_masks, get_fens_for_lmm
         # x -> (B,65,C), result of backbone.forward()
-        board_tokens = x[:, 1:, :] # get rid of CLS token -> (B,64,C)
-        board_tokens = board_tokens.view(-1, 8, 8, N_EMBD) # (B,8,8,C)
-        board_tokens = board_tokens.permute(0, 3, 1, 2) # (B,C,8,8)
-        logits = self.pred_head(board_tokens) # (B,NUM_PLANES,8,8)
+        board_tokens = x[:, 1:, :] # remove CLS token
+        B = x.shape[0]
+        flattened = board_tokens.view(B, -1)
+        to_move_logits = self.to_move_head(flattened)
+        from_move_logits = self.from_move_head(flattened)
 
         # Mask illegal moves
-        wnns = get_wnns_for_lmm(index) if index is not None else [fen_to_wnn(fen)]
-        mask = get_legal_move_mask(wnns)
-        masked_logits = logits.masked_fill(~mask, float('-inf')).to(DEVICE)
-        probs = F.softmax(masked_logits, dim=1)
-        if targets is None:
-            loss = None
-        else:
-            loss = F.cross_entropy(masked_logits, targets)
-        return probs, loss
+        fens = get_fens_for_lmm(index, split) if index is not None else [fen]
+        to_mask, from_mask = get_legal_move_masks(fens)
+        # Fix dimensionality if only 1 mask
+        if to_mask.shape[0] == 1 and B > 1:
+            to_mask = to_mask.expand(B, -1)
+            from_mask = from_mask.expand(B, -1)
+
+        masked_logits_to = to_move_logits.masked_fill(~to_mask, float('-inf')).to(DEVICE)
+        masked_logits_from = from_move_logits.masked_fill(~from_mask, float('-inf')).to(DEVICE)
+        to_probs = F.softmax(masked_logits_to, dim=1)
+        from_probs = F.softmax(masked_logits_from, dim=1)
+        loss = None
+        if to_targets is not None and from_targets is not None:
+            to_targets, from_targets = to_targets.view(-1, 64).argmax(dim=1), from_targets.view(-1, 64).argmax(dim=1)
+            to_loss = F.cross_entropy(masked_logits_to, to_targets)
+            from_loss = F.cross_entropy(masked_logits_from, from_targets)
+            loss = to_loss + from_loss
+        return to_probs, from_probs, loss
 
 class EvalHead(nn.Module):
     def __init__(self):
@@ -172,3 +181,7 @@ class TransformerBody(nn.Module):
         x = self.blocks(x) # (B,T,C)
         x = self.ln_f(x) # (B,T,C)
         return x
+
+if __name__ == "__main__":
+    import runpy
+    runpy.run_module("main", run_name="__main__")

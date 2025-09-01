@@ -13,11 +13,11 @@ random.seed(SEED)
 torch.manual_seed(SEED)
 
 # Open dataset
-features_raw, labels_raw = get_dataset()
+features_raw, evals_raw, preds_raw = get_dataset()
 print(f"Dataset size: {len(features_raw):,} FENs")
 
 # Convert centipawns into deca-pawns? (centipawns / 1000)
-labels_raw_deca = [x / 1000 for x in labels_raw]
+evals_raw_deca = [x / 1000 for x in evals_raw]
 
 # --------------------- Pretraining Tokenization --------------------------- #
 with open("../ucis.txt", "r") as f:
@@ -54,20 +54,40 @@ if os.path.exists(dataset_path):
     piece_features = saved["piece_features"]
     color_features = saved["color_features"]
     ttm_features = saved["ttm_features"]
-    labels = saved["labels"]
+    eval_labels = saved["eval_labels"]
+    to_pred_labels = saved["to_pred_labels"]
+    from_pred_labels = saved["from_pred_labels"]
     print(f"Loaded encoded tensors from {dataset_path}")
 else:
+    def create_pred_labels(raw_preds):
+        from_labels, to_labels = [], []
+        for raw_pred in raw_preds:
+            from_label = torch.zeros(64)
+            to_label = torch.zeros(64)
+            move = chess.Move.from_uci(raw_pred)
+            from_sq, to_sq = move.from_square, move.to_square
+            from_label[from_sq] = 1
+            to_label[to_sq] = 1
+            from_labels.append(from_label)
+            to_labels.append(to_label)
+        from_labels_t = torch.stack(from_labels, dim=0)
+        to_labels_t = torch.stack(to_labels, dim=0)
+        return to_labels_t, from_labels_t
     # Only encode first 64 characters of WNN that represent the board into piece and color features
-    piece_features = torch.stack([torch.tensor(encode_pieces(f[:64]), dtype=torch.long) for f in features_raw])
-    color_features = torch.stack([torch.tensor(encode_colors(f[:64]), dtype=torch.long) for f in features_raw])
+
+    piece_features = torch.stack([torch.tensor(encode_pieces(fen_to_wnn(f)[:64]), dtype=torch.long) for f in features_raw])
+    color_features = torch.stack([torch.tensor(encode_colors(fen_to_wnn(f)[:64]), dtype=torch.long) for f in features_raw])
     # Turn to move encoding (character 65 of a WNN string gives turn to move)
-    ttm_features = torch.stack([torch.tensor(encode_ttm(f[64]), dtype=torch.long) for f in features_raw])
-    labels = torch.tensor(labels_raw_deca, dtype=torch.float).unsqueeze(1)
+    ttm_features = torch.stack([torch.tensor(encode_ttm(fen_to_wnn(f)[64]), dtype=torch.long) for f in features_raw])
+    eval_labels = torch.tensor(evals_raw_deca, dtype=torch.float).unsqueeze(1)
+    to_pred_labels, from_pred_labels = create_pred_labels(preds_raw)
     torch.save({
         "piece_features": piece_features,
         "color_features": color_features,
         "ttm_features": ttm_features,
-        "labels": labels,
+        "eval_labels": eval_labels,
+        "to_pred_labels": to_pred_labels,
+        "from_pred_labels": from_pred_labels
     }, dataset_path)
     print(f"Saved encoded tensors to {dataset_path}")
 
@@ -77,68 +97,24 @@ features_raw_tr, features_raw_dev = features_raw[:n], features_raw[n:]
 piece_features_tr, piece_features_dev = piece_features[:n], piece_features[n:]
 color_features_tr, color_features_dev = color_features[:n], color_features[n:]
 ttm_features_tr, ttm_features_dev = ttm_features[:n], ttm_features[n:]
-labels_tr, labels_dev = labels[:n], labels[n:]
+eval_labels_tr, eval_labels_dev = eval_labels[:n], eval_labels[n:]
+from_pred_labels_tr, from_pred_labels_dev = from_pred_labels[:n], from_pred_labels[n:]
+to_pred_labels_tr, to_pred_labels_dev = to_pred_labels[:n], to_pred_labels[n:]
 
-def get_batch(split, size, return_wnns=False):
-    piece_features_x = piece_features_tr if split == 'train' else piece_features_dev
-    color_features_x = color_features_tr if split == 'train' else color_features_dev
-    ttm_features_x =   ttm_features_tr   if split == 'train' else ttm_features_dev
-    labels_x =         labels_tr         if split == 'train' else labels_dev
-    features_raw_x =   features_raw_tr   if split == 'train' else features_raw_dev
-    index = torch.randint(len(piece_features_x), (size,))
-    pieces_batch = torch.stack([piece_features_x[i.item()] for i in index])
-    colors_batch = torch.stack([color_features_x[i.item()] for i in index])
-    ttm_batch = torch.stack([ttm_features_x[i.item()] for i in index])
-    labels_batch = torch.stack([labels_x[i.item()] for i in index])
-
-    pieces_batch, colors_batch, ttm_batch, labels_batch = pieces_batch.to(DEVICE), colors_batch.to(
-        DEVICE), ttm_batch.to(DEVICE), labels_batch.to(DEVICE)
-
-    if return_wnns:
-        batch_wnns = [features_raw_x[i.item()] for i in index]
-        return pieces_batch, colors_batch, ttm_batch, labels_batch, index, batch_wnns
-    return pieces_batch, colors_batch, ttm_batch, labels_batch, index
-
-def get_wnns_for_lmm(index):
-    return [features_raw_tr[i] for i in index.tolist()]
-
-
-def get_legal_move_mask(wnns):
-    fens = [wnn_to_fen(wnn) for wnn in wnns]
-    masks = []
-    from utils import move_to_plane
-
-    for fen in fens:
-        board = chess.Board(fen)
-        mask = torch.zeros((NUM_PLANES, 8, 8), dtype=torch.bool, device=DEVICE)
-        for move in board.legal_moves:
-            uci = move.uci()
-            from_sq = chess.parse_square(uci[:2]) # board square encoded as 0-63
-            fs_x, fs_y = from_sq % 8, from_sq // 8 # row and column encoded as 0-7
-            plane = move_to_plane(move, board) # encode raw move into AlphaZero move plane
-            mask[plane, fs_y, fs_x] = True
-        masks.append(mask)
-    return torch.stack(masks, dim=0)
 
 def test_loss(model, eval_weight):
     with torch.no_grad():
-        p_t, c_t, ttm_t, eval_targets_t, ix_t = get_batch('train', BATCH_SIZE)
-        ix_l = ix_t.tolist()
-        pred_targets_t = [get_pred_target_raw(i) for i in ix_l]
-        ttm_list_t = ttm_t.tolist()
-        pred_labels_t = get_pred_labels(pred_targets_t, ttm_list_t)
-        p_t, c_t, ttm_t, ix_f, pred_labels_t, eval_targets_t = remove_none_tensors(
-            p_t, c_t, ttm_t, ix_l, pred_labels_t, eval_targets_t)
-        loss_t = model(p_t, c_t, ttm_t, ix_f, eval_weight, pred_targets=pred_labels_t, eval_targets=eval_targets_t)
+        pieces_batch, colors_batch, ttm_batch, eval_labels_batch, to_pred_labels_batch, from_pred_labels_batch, index = get_batch(
+            'train', BATCH_SIZE)
+        loss_t = model(pieces_batch, colors_batch, ttm_batch, index=index, eval_weight=MAX_FINETUNE_EVAL_WEIGHT,
+                       pred_targets_to=to_pred_labels_batch, pred_targets_from=from_pred_labels_batch,
+                       eval_targets=eval_labels_batch, split='train')
 
-        p_d, c_d, ttm_d, eval_targets_d, ix_d = get_batch('dev', BATCH_SIZE)
-        ix_l = ix_d.tolist()
-        pred_targets_d = [get_pred_target_raw(i) for i in ix_l]
-        ttm_list_d = ttm_d.tolist()
-        pred_labels_d = get_pred_labels(pred_targets_d, ttm_list_d)
-        p_d, c_d, ttm_d, ix_f, pred_targets_d, eval_targets_d = remove_none_tensors(
-            p_d, c_d, ttm_d, ix_l, pred_labels_d, eval_targets_d)
-        loss_d = model(p_d, c_d, ttm_d, ix_f, eval_weight, pred_targets=pred_labels_d, eval_targets=eval_targets_d)
+        pieces_batch, colors_batch, ttm_batch, eval_labels_batch, to_pred_labels_batch, from_pred_labels_batch, index = get_batch(
+            'dev', BATCH_SIZE)
+        loss_d = model(pieces_batch, colors_batch, ttm_batch, index=index, eval_weight=MAX_FINETUNE_EVAL_WEIGHT,
+                       pred_targets_to=to_pred_labels_batch, pred_targets_from=from_pred_labels_batch,
+                       eval_targets=eval_labels_batch, split='dev')
 
         print(f"Training loss (eval_weight={eval_weight}): {loss_t.item()}")
         print(f"Dev loss (eval_weight={eval_weight}): {loss_d.item()}")
@@ -166,18 +142,50 @@ def eval_fen(fen, model):
     evaluation, pred_probs = model(pieces, colors, ttm, fen=fen, return_preds=True)
     return 10 * evaluation.item(), pred_probs.squeeze(0).tolist()
 
-def remove_none_tensors(pieces_batch, colors_batch, ttm_batch, index_l, pred_targets, eval_targets):
-    keep_indices = [i for i, t in enumerate(pred_targets) if t is not None]
-    index_tensor = torch.tensor(keep_indices, device=DEVICE, dtype=torch.long)
-    index_f = torch.tensor([index_l[i] for i in range(len(index_l)) if i in keep_indices])
-    index_f.to(DEVICE)
+def get_batch(split, size, return_fens=False):
+    piece_features_x =   piece_features_tr   if split == 'train' else piece_features_dev
+    color_features_x =   color_features_tr   if split == 'train' else color_features_dev
+    ttm_features_x =     ttm_features_tr     if split == 'train' else ttm_features_dev
+    eval_labels_x  =     eval_labels_tr      if split == 'train' else eval_labels_tr
+    to_pred_labels_x =   to_pred_labels_tr   if split == 'train' else to_pred_labels_dev
+    from_pred_labels_x = from_pred_labels_tr if split == 'train' else from_pred_labels_dev
+    features_raw_x =     features_raw_tr     if split == 'train' else features_raw_dev
+    index = torch.randint(len(piece_features_x), (size,))
 
-    pred_targets_f = pred_targets[keep_indices].to(DEVICE)
-    eval_targets_f = (torch.tensor([eval_targets[i] for i in keep_indices]).to(DEVICE)).unsqueeze(1)
-    pieces_batch_f = pieces_batch.index_select(0, index_tensor).to(DEVICE)
-    colors_batch_f = colors_batch.index_select(0, index_tensor).to(DEVICE)
-    ttm_batch_f = ttm_batch.index_select(0, index_tensor).to(DEVICE)
-    return pieces_batch_f, colors_batch_f, ttm_batch_f, index_f, pred_targets_f, eval_targets_f
+    pieces_batch = torch.stack([piece_features_x[i.item()] for i in index])
+    colors_batch = torch.stack([color_features_x[i.item()] for i in index])
+    ttm_batch = torch.stack([ttm_features_x[i.item()] for i in index])
+    eval_labels_batch = torch.stack([eval_labels_x[i.item()] for i in index])
+    to_pred_labels_batch = to_pred_labels_x[index]
+    from_pred_labels_batch = from_pred_labels_x[index]
+
+    pieces_batch, colors_batch, ttm_batch, eval_labels_batch, to_pred_labels_batch, from_pred_labels_batch = (
+        pieces_batch.to(DEVICE), colors_batch.to(DEVICE), ttm_batch.to(DEVICE), eval_labels_batch.to(DEVICE),
+        to_pred_labels_batch.to(DEVICE), from_pred_labels_batch.to(DEVICE)
+    )
+
+    if return_fens:
+        batch_fens = [features_raw_x[i.item()] for i in index]
+        return pieces_batch, colors_batch, ttm_batch, eval_labels_batch, to_pred_labels_batch, from_pred_labels_batch, index, batch_fens
+    return pieces_batch, colors_batch, ttm_batch, eval_labels_batch, to_pred_labels_batch, from_pred_labels_batch, index
+
+def get_fens_for_lmm(index, split):
+    features_raw_x = features_raw_tr if split == 'train' else features_raw_dev
+    return [features_raw_x[i] for i in index.tolist()]
+
+def get_legal_move_masks(fens):
+    to_masks, from_masks = [], []
+    for fen in fens:
+        board = chess.Board(fen)
+        to_mask = torch.zeros(64, dtype=torch.bool, device=DEVICE)
+        from_mask = torch.zeros(64, dtype=torch.bool, device=DEVICE)
+        for move in board.legal_moves:
+            to_mask[move.to_square] = True
+            from_mask[move.from_square] = True
+        to_masks.append(to_mask)
+        from_masks.append(from_mask)
+    to_masks, from_masks = torch.stack(to_masks, dim=0), torch.stack(from_masks, dim=0)
+    return to_masks, from_masks
 
 def get_pred_target_raw(i):
     def move_from_fens(fen_a, fen_b):
@@ -200,51 +208,29 @@ def get_pred_target_raw(i):
         return None
     return move.uci()
 
-def get_pred_labels(pred_targets_raw, ttm_list):
-    pred_labels = torch.zeros((BATCH_SIZE, NUM_PLANES, 8, 8), device=DEVICE)
-    from utils import move_to_plane
-    for b, (uci, ttm) in enumerate(zip(pred_targets_raw, ttm_list)):
-        if uci is not None:
-            white_to_move = ttm == 0
-            move = chess.Move.from_uci(uci)
-            from_sq = move.from_square
-            plane = move_to_plane(move, white_to_move)
-            fx, fy = chess.square_file(from_sq), chess.square_rank(from_sq)
-            pred_labels[b, plane, fy, fx] = 1
-    return pred_labels
-
 def train(model, num_steps, model_name='taparoni'):
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
     loss_log = []
     weight_log = []
     for i in range(1, num_steps + 1):
-        pieces_batch, colors_batch, ttm_batch, eval_labels_batch, index = get_batch('train', BATCH_SIZE)
-
         # Forward pass
-        index_l = index.tolist()
-        pred_targets_raw = [get_pred_target_raw(i) for i in index_l]
-        ttm_list = ttm_batch.tolist()
-        pred_labels = get_pred_labels(pred_targets_raw, ttm_list)
-
-        # Remove None labels and their corresponding targets (positions with no next move)
-        pieces_batch_f, colors_batch_f, ttm_batch_f, index_f, pred_targets_f, eval_targets_f = remove_none_tensors(
-            pieces_batch, colors_batch, ttm_batch, index_l, pred_labels, eval_labels_batch)
-
-        if len(pred_targets_f) != 0:
-            progress = i / num_steps
-            current_eval_weight = MAX_FINETUNE_EVAL_WEIGHT * (0.5 - 0.5 * math.cos(math.pi * progress))
-            loss = model(pieces_batch_f, colors_batch_f, ttm_batch_f, index=index_f, eval_weight=current_eval_weight, pred_targets=pred_targets_f, eval_targets=eval_targets_f)
-            # Backward pass
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            optimizer.step()
-            # Log
-            loss_log.append(loss.item())
-            weight_log.append(current_eval_weight)
-            if i % LOSS_BENCH == 0:
-                recent_losses = loss_log[-LOSS_BENCH:]
-                approx_loss = sum(recent_losses) / len(recent_losses)
-                print(f"{i} / {num_steps}: bucket loss={approx_loss:.4f}")
+        pieces_batch, colors_batch, ttm_batch, eval_labels_batch, to_pred_labels_batch, from_pred_labels_batch, index = get_batch('train', BATCH_SIZE)
+        progress = i / num_steps
+        current_eval_weight = MAX_FINETUNE_EVAL_WEIGHT * (0.5 - 0.5 * math.cos(math.pi * progress))
+        loss = model(pieces_batch, colors_batch, ttm_batch, index=index, eval_weight=current_eval_weight,
+                     pred_targets_to=to_pred_labels_batch, pred_targets_from=from_pred_labels_batch,
+                     eval_targets=eval_labels_batch, split='train')
+        # Backward pass
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        optimizer.step()
+        # Log
+        loss_log.append(loss.item())
+        weight_log.append(current_eval_weight)
+        if i % LOSS_BENCH == 0:
+            recent_losses = loss_log[-LOSS_BENCH:]
+            approx_loss = sum(recent_losses) / len(recent_losses)
+            print(f"{i} / {num_steps}: bucket loss={approx_loss:.4f}")
 
     model.eval()
     print(f"model.{model_name} training finished!")

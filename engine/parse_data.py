@@ -17,8 +17,9 @@ def get_dataset():
     if os.path.exists(path):
         data = np.load(path, allow_pickle=True)
         features = data['features'].tolist()
-        labels = data['labels'].tolist()
-        return features, labels
+        evals = data['evals'].tolist()
+        preds = data['preds'].tolist()
+        return features, evals, preds
     else:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         file_path = os.path.join(script_dir, "..", "data", "evals.json")
@@ -26,10 +27,11 @@ def get_dataset():
         with open(file_path, 'r') as f:
             data = json.load(f)
 
-        feature_list = [entry["wnn"] for entry in data]
-        label_list = [entry["eval"] for entry in data]
-        np.savez(path, features=feature_list, labels=label_list)
-        return feature_list, label_list
+        features = [entry["fnn"] for entry in data]
+        evals = [entry["eval"] for entry in data]
+        preds = [entry['next_move'] for entry in data]
+        np.savez(path, features=features, evals=evals, preds=preds)
+        return features, evals, preds
 
 def get_filtered_games(log_freq=1000, max_games=None, max_positions=None,
                     filter_elite=False, elite_filter_min=2100):
@@ -181,9 +183,9 @@ def get_evals_json(log_freq):
     """
         Converts a .pgn file named "games_f.pgn" into a JSON named "evals.json"
         "fen_evals.json" contains a list of dictionaries containing every move from every game in
-        "games_f.pgn" (as WNNs) corresponding to the Stockfish evaluation of that position (in centipawns)
+        "games_f.pgn" (as FENs) corresponding to the Stockfish evaluation of that position (in centipawns)
     """
-    fens = []
+    dataset = []
     mate_value = MAX_CENTIPAWNS
     eval_regex = re.compile(r"\[%eval ([^]]+)]")
     num_positions = 0
@@ -195,29 +197,40 @@ def get_evals_json(log_freq):
             if game is None:
                 break
             board = game.board()
-            for node in game.mainline():
-                num_positions += 1
+            mainline_nodes = list(game.mainline())
+            for i, node in enumerate(mainline_nodes):
+
                 match = eval_regex.search(node.comment)
-                if match:
-                    eval_str = match.group(1)
-                    if eval_str.startswith("#"):
-                        mate_in = int(eval_str[1:])
-                        eval_value = mate_value if mate_in > 0 else -mate_value
-                    else:
-                        eval_value = float(eval_str) * 100
-                        if eval_value > mate_value:
-                            eval_value = mate_value
-                        elif eval_value < -mate_value:
-                            eval_value = -mate_value
-                    value = int(eval_value)
-                    fens.append((fen_to_wnn(board.fen()), value))
+                if not match:
+                    board.push(node.move)
+                    continue
+
+                eval_str = match.group(1)
+                if eval_str.startswith("#"):
+                    mate_in = int(eval_str[1:])
+                    eval_value = mate_value if mate_in > 0 else -mate_value
+                else:
+                    eval_value = float(eval_str) * 100
+                    if eval_value > mate_value:
+                        eval_value = mate_value
+                    elif eval_value < -mate_value:
+                        eval_value = -mate_value
+                value = int(eval_value)
+                if i + 1 < len(mainline_nodes):
+                    next_move = mainline_nodes[i].move.uci()
+                    dataset.append({
+                        "fnn": board.fen(),
+                        "eval": value,
+                        "next_move": next_move
+                    })
+                    num_positions += 1
                 board.push(node.move)
             if num_games % log_freq == 0:
                 print(f"{num_games} games processed ({num_positions} positions)")
 
-    fens_dict = [{"wnn": fen, "eval": eval_value} for fen, eval_value in fens]
-    max_eval = max(fens_dict, key=lambda x: x["eval"])
-    print(max_eval)
-
+    print(f"{num_games} games and {num_positions} positions processed in total!")
     with open("../data/evals.json", "w", encoding="utf-8") as f:
-            json.dump(fens_dict, f, ensure_ascii=False, indent=2)
+            json.dump(dataset, f, ensure_ascii=False, indent=2)
+
+if __name__ == '__main__':
+    get_evals_json(250)
