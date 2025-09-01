@@ -1,6 +1,4 @@
 import chess
-import torch
-from engine.hyperparams import DEVICE
 def move_to_plane(move: chess.Move, white_to_move):
     """
     0-6 = moving forward 1-7 spaces from perspective (e2e4 is forward for white, e7e5 is forward for black)
@@ -49,16 +47,7 @@ def move_to_plane(move: chess.Move, white_to_move):
     elif dx == -dy and dx > 0:  # SE
         return 49 + (dx - 1)
     raise ValueError(f"Move {move.uci()} not encodable")
-def probs_to_uci(probs, white_to_move):
-    from main import move_to_i
-    B = probs.size(0)
-    out = torch.zeros((B, len(move_to_i)), device=DEVICE)
-    for b, plane, rank, file in probs.tolist():
-        from_sq = chess.square(file, rank)
-        uci = plane_to_uci(from_sq, plane, white_to_move)
-        idx = move_to_i[uci]
-        out[b, idx] = probs[b, plane, rank, file]
-    return out
+
 def plane_to_uci(from_sq, plane, white_to_move) -> str:
     """
     Convert (from square index 0..63, plane index 0..63, turn) into UCI string.
@@ -111,3 +100,31 @@ def plane_to_delta(plane):
         return dx, 1
     else:
         raise ValueError(f"Invalid plane index {plane}")
+
+def decode_all_predictions(probs, fens):
+    """
+    Returns:
+        - If B > 1: 2d list of shape (B, T) where T = num_legal_moves for that position
+        - If B == 1: just a list of UCIs, shape (T)
+    Moves are returned ordered from the highest prob -> the lowest prob
+    """
+    B = probs.shape[0]
+    results = []
+    # sort from highest to lowest prob
+    sorted_idx = probs.argsort(dim=1, descending=True) # (B, 67*64)
+
+    for b in range(B):
+        nonzero = [i for i in sorted_idx[b].tolist() if probs[b, i] > 0]
+        fen = fens[b]
+        board = chess.Board(fen)
+        white_to_move = board.turn == chess.WHITE
+        moves = []
+        for idx in nonzero:
+            from_sq = idx % 64
+            plane = idx // 64
+            uci = plane_to_uci(from_sq, plane, white_to_move)
+            moves.append(uci)
+        results.append(moves)
+    if B == 1:
+        return results[0]
+    return results

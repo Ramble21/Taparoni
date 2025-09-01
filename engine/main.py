@@ -1,6 +1,6 @@
 import chess
 
-from engine.utils import move_to_plane
+from engine.utils import move_to_plane, decode_all_predictions
 from parse_data import *
 from model import TwoHeadTransformer
 import matplotlib.pyplot as plt
@@ -18,17 +18,13 @@ torch.manual_seed(SEED)
 features_raw, evals_raw, preds_raw = get_dataset()
 print(f"Dataset size: {len(features_raw):,} FENs")
 
+# --------------------- Pretraining Tokenization --------------------------- #
 # Convert centipawns into deca-pawns? (centipawns / 1000)
 evals_raw_deca = [x / 1000 for x in evals_raw]
-
-# --------------------- Pretraining Tokenization --------------------------- #
 with open("../ucis.txt", "r") as f:
     ucis_raw = [line.strip() for line in f if line.strip()]
 
 vocab_size = len(ucis_raw)
-move_to_i = {move: i for i, move in enumerate(ucis_raw)}
-i_to_move = {i: move for i, move in enumerate(ucis_raw)}
-decode_moves = lambda s: [i_to_move.get(i) for i in s.tolist()]
 print(f"{vocab_size} pre-train tokens")
 
 # --------------------- Finetuning Tokenization --------------------------- #
@@ -145,7 +141,9 @@ def eval_fen(fen, model):
     colors = torch.tensor(encode_colors(wnn[:64]), dtype=torch.long, device=DEVICE)
     ttm = torch.tensor(encode_ttm(wnn[64]), dtype=torch.long, device=DEVICE)
     evaluation, pred_probs = model(pieces, colors, ttm, fen=fen, return_preds=True)
-    return 10 * evaluation.item(), pred_probs.squeeze(0).tolist()
+
+    preds = decode_all_predictions(pred_probs, [fen])
+    return 10 * evaluation.item(), preds
 
 def get_batch(split, size, return_fens=False):
     piece_features_x = piece_features_tr   if split == 'train' else piece_features_dev
@@ -247,4 +245,4 @@ def load_old_model():
 
 # --------------- Transformer ---------------
 if __name__ == '__main__':
-    m = train_new_model()
+    m = load_old_model()

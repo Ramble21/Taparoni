@@ -76,16 +76,14 @@ class TwoHeadTransformer(nn.Module):
         x = self.backbone(pieces, colors, ttm)
 
         zero = torch.tensor(0.0, device=DEVICE)
-        if eval_weight < 1:
+        if 0 < eval_weight < 1:
+            evaluation, eval_loss = self.evaluation_head(x, eval_targets)
             if index is not None:
                 pred_probs, pred_loss = self.prediction_head(x, index=index, targets=pred_targets, split=split)
             else:
                 pred_probs, pred_loss = self.prediction_head(x, fen=fen, targets=pred_targets, split=split)
         else:
             pred_probs, pred_loss = None, zero
-        if eval_weight > 0:
-            evaluation, eval_loss = self.evaluation_head(x, eval_targets)
-        else:
             evaluation, eval_loss = None, zero
 
         if return_preds:
@@ -116,13 +114,10 @@ class PredictionHead(nn.Module):
         # Mask illegal moves
         fens = get_fens_for_lmm(index, split) if index is not None else [fen]
         plane_mask = get_legal_move_mask(fens)
-        # Fix dimensionality if only 1 mask
-        if plane_mask.shape[0] == 1 and B > 1:
-            plane_mask = plane_mask.expand(B, -1)
 
         masked_logits = logits.masked_fill(~plane_mask, float('-inf')).to(DEVICE)
         logits_flat = masked_logits.flatten(1) # (B, P*8*8)
-        probs = F.softmax(logits, dim=1)
+        probs = F.softmax(logits_flat, dim=1)
         loss = None
         if targets is not None:
             loss = F.cross_entropy(logits_flat, targets)

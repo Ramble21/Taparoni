@@ -1,6 +1,6 @@
 import chess
 
-from main import eval_fen, load_old_model, move_to_i
+from main import eval_fen, load_old_model
 import chess.polyglot
 import random
 
@@ -71,16 +71,14 @@ def minimax(fen, threefold_lookup, model, depth, max_lines, alpha, beta):
         return best_value, best_move
 
 def get_legal_moves(fen, model, max_lines):
-    _, pred_probs = eval_fen(fen, model)
+    _, moves = eval_fen(fen, model)
     white_to_move = fen.split()[1] == 'w'
     board = chess.Board(fen)
-    moves = list(board.legal_moves)
-    moves.sort(key=lambda mv: pred_probs[move_to_i[mv.uci()]])
-    if white_to_move:
+    if not white_to_move:
         moves.reverse()
     fens = []
-    for move in moves:
-        board.push(move)
+    for uci in moves:
+        board.push(chess.Move.from_uci(uci))
         fens.append(board.fen())
         board.pop()
     if max_lines is None:
@@ -109,6 +107,7 @@ class Game:
             print("Game over! Result:", self.board.result())
             return
         best_move = get_next_move(self.board, model=self.model, depth=self.model_depth, max_lines=self.max_lines)
+        best_move = chess.Move.from_uci(best_move)
         san = self.board.san(best_move)
         self.board.push(best_move)
         response = f"Bot plays {san}. {"White" if self.player_color == 'w' else "Black"} to move."
@@ -134,4 +133,4 @@ class Game:
 
 if __name__ == '__main__':
     m = load_old_model()
-    Game(m, bot_color='w', model_depth=4, max_lines=10)
+    Game(m, bot_color='w', model_depth=4, max_lines=5)
