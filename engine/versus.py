@@ -15,11 +15,11 @@ def evaluate_position(fen, threefold_lookup, model):
         evaluation, _ = eval_fen(fen, model)
         return evaluation
 
-def get_next_move(board, model, depth, max_lines):
+def get_next_move(board, model, depth, max_lines, starting_position):
 
     def init_lookup(final_board):
         lookup = {}
-        temp_board = chess.Board()
+        temp_board = chess.Board(starting_position) if starting_position is not None else chess.Board()
         for mv in final_board.move_stack:
             temp_board.push(mv)
             key = chess.polyglot.zobrist_hash(temp_board)
@@ -95,6 +95,7 @@ class Game:
         self.model_depth = model_depth
         self.model = model
         self.max_lines = max_lines
+        self.starting_position = starting_position
         if self.bot_color == 'w':
             print("Bot is playing the white pieces, and will make the first move.")
             self.bot_move()
@@ -106,7 +107,7 @@ class Game:
         if self.board.is_game_over():
             print("Game over! Result:", self.board.result())
             return
-        best_move = get_next_move(self.board, model=self.model, depth=self.model_depth, max_lines=self.max_lines)
+        best_move = get_next_move(self.board, model=self.model, depth=self.model_depth, max_lines=self.max_lines, starting_position=self.starting_position)
         best_move = chess.Move.from_uci(best_move)
         san = self.board.san(best_move)
         self.board.push(best_move)
@@ -133,4 +134,4 @@ class Game:
 
 if __name__ == '__main__':
     m = load_old_model()
-    Game(m, bot_color='w', model_depth=4, max_lines=5)
+    Game(m, bot_color='w', model_depth=4, max_lines=5, starting_position="Q7/7k/8/2K5/8/8/8/8 w - - 1 66")
