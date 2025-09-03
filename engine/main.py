@@ -146,27 +146,20 @@ def eval_fen(fen, model):
     return 10 * evaluation.item(), preds
 
 def get_batch(split, size, return_fens=False):
-    piece_features_x = piece_features_tr   if split == 'train' else piece_features_dev
-    color_features_x = color_features_tr   if split == 'train' else color_features_dev
-    ttm_features_x =   ttm_features_tr     if split == 'train' else ttm_features_dev
-    eval_labels_x  =   eval_labels_tr      if split == 'train' else eval_labels_tr
-    pred_labels_x  =   pred_labels_tr      if split == 'train' else pred_labels_dev
-    features_raw_x =   features_raw_tr     if split == 'train' else features_raw_dev
-    index = torch.randint(len(piece_features_x), (size,))
+    if split == 'train':
+        pf, cf, tf, el, pl, fr = piece_features_tr, color_features_tr, ttm_features_tr, eval_labels_tr, pred_labels_tr, features_raw_tr
+    else:
+        pf, cf, tf, el, pl, fr = piece_features_dev, color_features_dev, ttm_features_dev, eval_labels_dev, pred_labels_dev, features_raw_dev
 
-    pieces_batch = torch.stack([piece_features_x[i.item()] for i in index])
-    colors_batch = torch.stack([color_features_x[i.item()] for i in index])
-    ttm_batch = torch.stack([ttm_features_x[i.item()] for i in index])
-    eval_labels_batch = torch.stack([eval_labels_x[i.item()] for i in index])
-    pred_labels_batch = torch.stack([pred_labels_x[i.item()] for i in index])
-
-    pieces_batch, colors_batch, ttm_batch, eval_labels_batch, pred_labels_batch = (
-        pieces_batch.to(DEVICE), colors_batch.to(DEVICE), ttm_batch.to(DEVICE),
-        eval_labels_batch.to(DEVICE), pred_labels_batch.to(DEVICE)
-    )
+    index = torch.randint(len(pf), (size,))
+    pieces_batch = pf[index].to(DEVICE, non_blocking=True)
+    colors_batch = cf[index].to(DEVICE, non_blocking=True)
+    ttm_batch    = tf[index].to(DEVICE, non_blocking=True)
+    eval_labels_batch = el[index].to(DEVICE, non_blocking=True)
+    pred_labels_batch = pl[index].to(DEVICE, non_blocking=True)
 
     if return_fens:
-        batch_fens = [features_raw_x[i.item()] for i in index]
+        batch_fens = [fr[i.item()] for i in index]
         return pieces_batch, colors_batch, ttm_batch, eval_labels_batch, pred_labels_batch, index, batch_fens
     return pieces_batch, colors_batch, ttm_batch, eval_labels_batch, pred_labels_batch, index
 

@@ -15,6 +15,7 @@ NUM_PLANES = 67 # number of "types of moves" the model can make - AlphaZero uses
 
 # Other various magic numbers
 MAX_CENTIPAWNS = 1000 # the maximum amount of centipawns used to determine "completely winning"
+MATE_VALUE = 100 # value (in pawns) used to represent mate
 TRAINING_SIZE = 0.9 # amount of the dataset used in training vs dev, i.e 0.9 = 90% training, 10% dev
 NUM_SAMPLES = 5 # number of samples taken as a test after model training
 

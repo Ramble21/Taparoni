@@ -62,6 +62,8 @@ def plane_to_uci(from_sq, plane, white_to_move) -> str:
         raise ValueError(f"Target off board: from {from_sq}, plane {plane}, white to move {white_to_move}")
     from_uci = chess.square_name(from_sq)
     to_uci = chess.square_name(chess.square(tx, ty))
+    if 64 <= plane <= 66:
+        return from_uci + to_uci + 'q' # promotion
     return from_uci + to_uci
 def plane_to_delta(plane):
     """
