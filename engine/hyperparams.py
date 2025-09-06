@@ -19,6 +19,12 @@ MATE_VALUE = 100 # value (in pawns) used to represent mate
 TRAINING_SIZE = 0.9 # amount of the dataset used in training vs dev, i.e 0.9 = 90% training, 10% dev
 NUM_SAMPLES = 5 # number of samples taken as a test after model training
 
+# Hyperparameters used at search time
+PRED_WEIGHT = 0.075 # weight that is assigned to the probabilities spit out by the model
+MODEL_DEPTH = 3 # minimax depth of the model
+MAX_LINES = 5 # maximum number of candidate moves selected, ignoring captures and checks
+QUIESCENCE_DEPTH = 2 # additional depth added for quiescence after captures
+
 # Numbers used for model training
 NUM_STEPS_PRETRAIN = 140000 # number of steps used in model pretraining
 NUM_STEPS_FINETUNE = 60000 # number of steps used in model finetuning

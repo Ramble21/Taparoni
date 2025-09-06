@@ -105,10 +105,8 @@ def plane_to_delta(plane):
 
 def decode_all_predictions(probs, fens):
     """
-    Returns:
-        - If B > 1: 2d list of shape (B, T) where T = num_legal_moves for that position
-        - If B == 1: just a list of UCIs, shape (T)
-    Moves are returned ordered from the highest prob -> the lowest prob
+    Returns a list of tuples with every move and the probability that it is the "best" move
+    If B > 1, returns a list of dictionaries for each
     """
     B = probs.shape[0]
     results = []
@@ -124,8 +122,9 @@ def decode_all_predictions(probs, fens):
         for idx in nonzero:
             from_sq = idx % 64
             plane = idx // 64
+            prob = probs[b, idx].item()
             uci = plane_to_uci(from_sq, plane, white_to_move)
-            moves.append(uci)
+            moves.append((uci, prob))
         results.append(moves)
     if B == 1:
         return results[0]

@@ -1,15 +1,19 @@
+import math
 import chess
 
 from main import eval_fen, load_old_model
-from hyperparams import MATE_VALUE
+from hyperparams import *
 import chess.polyglot
-import random
 
 def evaluate_position(fen, threefold_lookup, model):
     board = chess.Board(fen)
     key = chess.polyglot.zobrist_hash(board)
     if board.is_checkmate():
-        return (MATE_VALUE if board.turn == chess.BLACK else -MATE_VALUE), True
+        halfmove_number = board.fullmove_number * 2 - (0 if board.turn == chess.WHITE else 1)
+        mate_distance_adjustment = halfmove_number / 10
+        if board.turn == chess.WHITE:
+            return -MATE_VALUE + mate_distance_adjustment, True
+        return MATE_VALUE - mate_distance_adjustment, True
     elif board.is_stalemate() or board.is_insufficient_material() or board.can_claim_fifty_moves() or threefold_lookup[key] >= 3:
         return 0, True
     else:
@@ -29,8 +33,8 @@ def get_next_move(board, model, depth, max_lines, starting_position, q_depth):
 
     fen = board.fen()
     threefold_lookup = init_lookup(board)
-    score, move = minimax(fen, threefold_lookup, model, depth, max_lines, float('-inf'), float('inf'), q_depth)
-    candidate_moves, _ = get_legal_moves(fen, model, max_lines)
+    score, move = minimax(fen, threefold_lookup, model, depth, max_lines, float('-inf'), float('inf'), q_depth, root=True)
+    candidate_moves, _ = get_candidate_moves(fen, model, max_lines)
     return move, candidate_moves
 
 def quiescence_search(fen, threefold_lookup, model, alpha, beta, q_depth):
@@ -60,9 +64,6 @@ def quiescence_search(fen, threefold_lookup, model, alpha, beta, q_depth):
         return check_flag, cap_val + promo_bonus
 
     forcing.sort(key=score_move, reverse=True)
-
-    if q_depth <= 0 or game_over:
-        return eval_raw
 
     if board.turn == chess.WHITE:
         if eval_raw > alpha:
@@ -101,8 +102,7 @@ def quiescence_search(fen, threefold_lookup, model, alpha, beta, q_depth):
                     return best
         return best
 
-def minimax(fen, threefold_lookup, model, depth, max_lines, alpha, beta, q_depth):
-
+def minimax(fen, threefold_lookup, model, depth, max_lines, alpha, beta, q_depth, root=False):
     board = chess.Board(fen)
     key = chess.polyglot.zobrist_hash(board)
     threefold_lookup[key] = threefold_lookup.get(key, 0) + 1
@@ -111,63 +111,89 @@ def minimax(fen, threefold_lookup, model, depth, max_lines, alpha, beta, q_depth
         value = quiescence_search(fen, threefold_lookup, model, alpha, beta, q_depth)
         return value, None
 
-    legal_moves, legal_fens = get_legal_moves(fen, model, max_lines)
+    candidate_moves, candidate_preds = get_candidate_moves(fen, model, max_lines)
     white_to_move = board.turn == chess.WHITE
 
-    if white_to_move:
-        best_value = float('-inf')
-        best_move = None
-        for i in range(len(legal_fens)):
-            mv, f = legal_moves[i], legal_fens[i]
-            value, _ = minimax(f, threefold_lookup, model, depth-1, max_lines, alpha, beta, q_depth)
-            if value > best_value:
-                best_value, best_move = value, mv
-            alpha = max(alpha, value)
-            if beta <= alpha:
-                break
-        return best_value, best_move
-    else:
-        best_value = float('inf')
-        best_move = None
-        for i in range(len(legal_fens)):
-            mv, f = legal_moves[i], legal_fens[i]
-            value, _ = minimax(f, threefold_lookup, model, depth-1, max_lines, alpha, beta, q_depth)
-            if value < best_value:
-                best_value, best_move = value, mv
-            beta = min(beta, value)
-            if beta <= alpha:
-                break
-        return best_value, best_move
+    best_value_unweighted = float('-inf') if white_to_move else float('inf')
+    best_value_weighted = float('-inf') if white_to_move else float('inf')
+    best_move_weighted = None
+    best_move_unweighted = None
 
-def get_legal_moves(fen, model, max_lines):
-    _, moves = eval_fen(fen, model)
+    for i in range(len(candidate_moves)):
+        mv_uci = candidate_moves[i]
+        board.push(chess.Move.from_uci(mv_uci))
+        child_key = chess.polyglot.zobrist_hash(board)
+        value_unweighted, _ = minimax(board.fen(), threefold_lookup, model, depth-1, max_lines, alpha, beta, q_depth, root=False)
+        threefold_lookup[child_key] -= 1
+        board.pop()
+
+        prob = candidate_preds[i]
+        weight = PRED_WEIGHT * math.log(prob)
+        value_weighted = value_unweighted
+        if root:
+            value_weighted = value_unweighted + (weight if white_to_move else -weight)
+
+        if depth == 3:
+            print(mv_uci, value_unweighted, prob, value_weighted)
+
+        if white_to_move:
+            if value_weighted > best_value_weighted:
+                best_value_weighted, best_move_weighted = value_weighted, mv_uci
+            if value_unweighted > best_value_unweighted:
+                best_value_unweighted, best_move_unweighted = value_unweighted, mv_uci
+            alpha = max(alpha, value_unweighted)
+        else:
+            if value_weighted < best_value_weighted:
+                best_value_weighted, best_move_weighted = value_weighted, mv_uci
+            if value_unweighted < best_value_unweighted:
+                best_value_unweighted, best_move_unweighted = value_unweighted, mv_uci
+            beta = min(beta, value_unweighted)
+        if beta <= alpha:
+            break
+    if root:
+        return best_value_weighted, best_move_weighted
+    return best_value_unweighted, best_move_unweighted
+
+def get_candidate_moves(fen, model, max_lines):
+    _, move_preds = eval_fen(fen, model)
+    moves, preds = zip(*move_preds)
+    moves, preds = list(moves), list(preds)
+    moves_cut, preds_cut = moves, preds
     if max_lines is not None:
-        moves = moves[:max_lines]
+        moves_cut = moves[:max_lines]
+        preds_cut = preds[:max_lines]
 
     board = chess.Board(fen)
     for move in board.legal_moves:
-        if (board.is_capture(move) or board.gives_check(move)) and move.uci() not in moves:
-            moves.append(move.uci())
-
-    fens = []
-    for uci in moves:
-        board.push(chess.Move.from_uci(uci))
-        fens.append(board.fen())
-        board.pop()
-    return moves, fens
+        if (board.is_capture(move) or board.gives_check(move)) and move.uci() not in moves_cut:
+            moves_cut.append(move.uci())
+            found_pred = None
+            for m_uci, p in zip(moves, preds):
+                if m_uci == move.uci():
+                    found_pred = p
+                    break
+            if found_pred is None:
+                found_pred = 1e-8
+            preds_cut.append(found_pred)
+    # renormalize
+    preds_cut = [pred / sum(preds_cut) for pred in preds_cut]
+    return moves_cut, preds_cut
 
 class Game:
 
-    def __init__(self, model, bot_color=None, starting_position="", model_depth=1, q_depth=1, max_lines=None):
-        self.bot_color = 'w' if bot_color == 'w' else 'b' if bot_color == 'b' else random.choice('wb')
+    def __init__(self, model, bot_color=None, starting_position=""):
+        def random(s):
+            import random
+            return random.choice(s)
+        self.bot_color = 'w' if bot_color == 'w' else 'b' if bot_color == 'b' else random('wb')
         self.player_color = 'b' if self.bot_color == 'w' else 'w'
         self.board = chess.Board() if starting_position == "" else chess.Board(starting_position)
-        self.model_depth = model_depth
+        self.model_depth = MODEL_DEPTH
         self.model = model
-        self.max_lines = max_lines
+        self.max_lines = MAX_LINES
         self.starting_position = starting_position
         self.bot_candidate_moves = []
-        self.q_depth = q_depth
+        self.q_depth = QUIESCENCE_DEPTH
         if self.bot_color == 'w':
             print("Bot is playing the white pieces, and will make the first move.")
             self.bot_move()
@@ -210,4 +236,4 @@ class Game:
 
 if __name__ == '__main__':
     m = load_old_model()
-    Game(m, bot_color='w', model_depth=3, max_lines=5, starting_position="")
+    Game(m, bot_color='w', starting_position="")

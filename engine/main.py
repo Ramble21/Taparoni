@@ -5,13 +5,11 @@ from parse_data import *
 from model import TwoHeadTransformer
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
-import random
 import math
 from hyperparams import *
 
 # Seed for consistent random numbers
 SEED = 8675309
-random.seed(SEED)
 torch.manual_seed(SEED)
 
 # Open dataset
@@ -136,14 +134,15 @@ def graph(log, bucket_size, zero_y_axis=False, graph_type="loss", model_title="u
 
 def eval_fen(fen, model):
     model.eval()
-    wnn = fen_to_wnn(fen)
-    pieces = torch.tensor(encode_pieces(wnn[:64]), dtype=torch.long, device=DEVICE)
-    colors = torch.tensor(encode_colors(wnn[:64]), dtype=torch.long, device=DEVICE)
-    ttm = torch.tensor(encode_ttm(wnn[64]), dtype=torch.long, device=DEVICE)
-    evaluation, pred_probs = model(pieces, colors, ttm, fen=fen, return_preds=True)
+    with torch.no_grad():
+        wnn = fen_to_wnn(fen)
+        pieces = torch.tensor(encode_pieces(wnn[:64]), dtype=torch.long, device=DEVICE)
+        colors = torch.tensor(encode_colors(wnn[:64]), dtype=torch.long, device=DEVICE)
+        ttm = torch.tensor(encode_ttm(wnn[64]), dtype=torch.long, device=DEVICE)
+        evaluation, pred_probs = model(pieces, colors, ttm, fen=fen, return_preds=True)
 
-    preds = decode_all_predictions(pred_probs, [fen])
-    return 10 * evaluation.item(), preds
+        preds = decode_all_predictions(pred_probs, [fen])
+        return 10 * evaluation.item(), preds
 
 def get_batch(split, size, return_fens=False):
     if split == 'train':
