@@ -20,7 +20,7 @@ def evaluate_position(fen, threefold_lookup, model):
         evaluation, _ = eval_fen(fen, model)
         return evaluation, False
 
-def get_next_move(board, model, depth, max_lines, starting_position, q_depth):
+def get_next_move(board, model, depth, max_lines, starting_position, TT, q_depth):
 
     def init_lookup(final_board):
         lookup = {}
@@ -33,7 +33,7 @@ def get_next_move(board, model, depth, max_lines, starting_position, q_depth):
 
     fen = board.fen()
     threefold_lookup = init_lookup(board)
-    score, move = minimax(fen, threefold_lookup, model, depth, max_lines, float('-inf'), float('inf'), q_depth, root=True)
+    score, move = minimax(fen, threefold_lookup, model, depth, max_lines, float('-inf'), float('inf'), TT, q_depth, root=True)
     candidate_moves, _ = get_candidate_moves(fen, model, max_lines)
     return move, candidate_moves
 
@@ -102,10 +102,23 @@ def quiescence_search(fen, threefold_lookup, model, alpha, beta, q_depth):
                     return best
         return best
 
-def minimax(fen, threefold_lookup, model, depth, max_lines, alpha, beta, q_depth, root=False):
+def minimax(fen, threefold_lookup, model, depth, max_lines, alpha, beta, TT, q_depth, root=False):
     board = chess.Board(fen)
     key = chess.polyglot.zobrist_hash(board)
+    orig_alpha, orig_beta = alpha, beta
     threefold_lookup[key] = threefold_lookup.get(key, 0) + 1
+
+    if key in TT:
+        entry = TT[key]
+        if entry['depth'] >= depth:
+            if entry['flag'] == 'EXACT':
+                return entry['value'], entry.get('best_move', None)
+            if entry['flag'] == 'LOWERBOUND':
+                alpha = max(alpha, entry['value'])
+            elif entry['flag'] == 'UPPERBOUND':
+                beta = min(beta, entry['value'])
+            if alpha >= beta:
+                return entry['value'], entry.get('best_move', None)
 
     if depth == 0 or board.is_game_over(claim_draw=True) or threefold_lookup[key] >= 3:
         value = quiescence_search(fen, threefold_lookup, model, alpha, beta, q_depth)
@@ -123,12 +136,12 @@ def minimax(fen, threefold_lookup, model, depth, max_lines, alpha, beta, q_depth
         mv_uci = candidate_moves[i]
         board.push(chess.Move.from_uci(mv_uci))
         child_key = chess.polyglot.zobrist_hash(board)
-        value_unweighted, _ = minimax(board.fen(), threefold_lookup, model, depth-1, max_lines, alpha, beta, q_depth, root=False)
+        value_unweighted, _ = minimax(board.fen(), threefold_lookup, model, depth-1, max_lines, alpha, beta, TT, q_depth, root=False)
         threefold_lookup[child_key] -= 1
         board.pop()
 
         prob = candidate_preds[i]
-        weight = PRED_WEIGHT * math.log(prob)
+        weight = PRED_WEIGHT * math.log(max(prob, 1e-8))
         value_weighted = value_unweighted
         if root:
             value_weighted = value_unweighted + (weight if white_to_move else -weight)
@@ -150,6 +163,18 @@ def minimax(fen, threefold_lookup, model, depth, max_lines, alpha, beta, q_depth
             beta = min(beta, value_unweighted)
         if beta <= alpha:
             break
+    if best_value_unweighted <= orig_alpha:
+        flag = 'UPPERBOUND'
+    elif best_value_unweighted >= orig_beta:
+        flag = 'LOWERBOUND'
+    else:
+        flag = 'EXACT'
+    TT[key] = {
+        'depth': depth,
+        'value': best_value_unweighted,
+        'flag': flag,
+        'best_move': best_move_unweighted
+    }
     if root:
         return best_value_weighted, best_move_weighted
     return best_value_unweighted, best_move_unweighted
@@ -194,6 +219,7 @@ class Game:
         self.starting_position = starting_position
         self.bot_candidate_moves = []
         self.q_depth = QUIESCENCE_DEPTH
+        self.TT = {}
         if self.bot_color == 'w':
             print("Bot is playing the white pieces, and will make the first move.")
             self.bot_move()
@@ -205,7 +231,7 @@ class Game:
         if self.board.is_game_over():
             print("Game over! Result:", self.board.result())
             return
-        best_move, candidate_moves = get_next_move(self.board, model=self.model, depth=self.model_depth, max_lines=self.max_lines, starting_position=self.starting_position, q_depth=self.q_depth)
+        best_move, candidate_moves = get_next_move(self.board, model=self.model, depth=self.model_depth, max_lines=self.max_lines, starting_position=self.starting_position, TT=self.TT, q_depth=self.q_depth)
         self.bot_candidate_moves = candidate_moves
         best_move = chess.Move.from_uci(best_move)
         san = self.board.san(best_move)
