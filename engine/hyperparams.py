@@ -3,10 +3,11 @@ import torch
 # Basic hyperparameters
 BATCH_SIZE = 32 # number of sequences being processed by the transformer in parallel
 N_EMBD = 128 # number of embedding dimensions
+N_EMBD_EVAL = 256 # number of embedding dimensions in the eval head MLP
 NUM_HEADS = 4 # number of heads in each multi-head attention module
 NUM_BLOCKS = 4 # number of blocks inside the transformer
 DROPOUT = 0.1 # rate at which dropout is applied (i.e 0.2 = 20% of neurons)
-LR = 3e-4 # learning rate parameter for optimization
+LR = 1e-4 # learning rate parameter for optimization
 
 # Hyperparameters used in move-pred head
 CONV_CHANNELS = 32 # number of out channels in the convolution in pred head
@@ -26,8 +27,8 @@ MAX_LINES = 5 # maximum number of candidate moves selected, ignoring captures an
 QUIESCENCE_DEPTH = 2 # additional depth added for quiescence after captures
 
 # Numbers used for model training
-NUM_STEPS_PRETRAIN = 140000 # number of steps used in model pretraining
-NUM_STEPS_FINETUNE = 60000 # number of steps used in model finetuning
+NUM_STEPS_PRETRAIN = 0 # number of steps used in model pretraining
+NUM_STEPS_FINETUNE = 250000 # number of steps used in model finetuning
 MAX_FINETUNE_EVAL_WEIGHT = 0.4 # maximum percentage of the total loss assigned to the evaluation model during finetuning
 LOSS_BENCH = 250 # number of steps inbetween loss benchmarking prints during optimization
 

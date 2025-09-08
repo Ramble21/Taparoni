@@ -233,4 +233,4 @@ def get_evals_json(log_freq):
             json.dump(dataset, f, ensure_ascii=False, indent=2)
 
 if __name__ == '__main__':
-    get_evals_json(250)
+    get_evals_json(1000)

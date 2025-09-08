@@ -1,7 +1,13 @@
-# Data (exceeds Github's limits, often trial-specific)
-# games.pgn taken from https://database.lichess.org/, remaining files can be created
-# from scratch using the commands in parse_data.py
-/data/*
+# Gitignoring most of the data (exceeds Github's limits, often trial-specific), with the exception of
+# dataset_encoded.pt, which is necessary to recreate any one version of the model
+# games.pgn is the extracted version of the .pgn.zst downloaded from https://database.lichess.org/,
+# remaining files can be created from scratch using the functions found in parse_data.py
+/data/dataset.npz
+/data/dataset_encoded.pt
+/data/evals.json
+/data/games.pgn
+/data/games_f.pgn
+
 
 # Other random gyatt that I need to gitignore
 __pycache__/

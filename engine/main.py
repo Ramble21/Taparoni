@@ -103,7 +103,7 @@ def test_loss(model, eval_weight):
         print(f"Training loss (eval_weight={eval_weight}): {loss_t.item()}")
         print(f"Dev loss (eval_weight={eval_weight}): {loss_d.item()}")
 
-def graph(log, bucket_size, zero_y_axis=False, graph_type="loss", model_title="unknown", save_dir="../data/loss"):
+def graph(log, bucket_size, zero_y_axis=False, graph_type="loss", model_title="unknown", save_dir="../graphs"):
     log_tensor = torch.tensor(log)
     num_steps = len(log_tensor)
     trunc_len = (num_steps // bucket_size) * bucket_size
@@ -186,7 +186,7 @@ def train(model, num_steps, model_name='taparoni'):
         # Forward pass
         pieces_batch, colors_batch, ttm_batch, eval_labels_batch, pred_labels_batch, index = get_batch('train', BATCH_SIZE)
         progress = i / num_steps
-        current_eval_weight = MAX_FINETUNE_EVAL_WEIGHT * (0.5 - 0.5 * math.cos(math.pi * progress))
+        current_eval_weight = 0 if model_name == 'pretrain' else MAX_FINETUNE_EVAL_WEIGHT * (0.5 - 0.5 * math.cos(math.pi * progress))
         loss = model(pieces_batch, colors_batch, ttm_batch, index=index, eval_weight=current_eval_weight,
                      pred_targets=pred_labels_batch, eval_targets=eval_labels_batch, split='train')
         # Backward pass

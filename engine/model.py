@@ -76,15 +76,15 @@ class TwoHeadTransformer(nn.Module):
         x = self.backbone(pieces, colors, ttm)
 
         zero = torch.tensor(0.0, device=DEVICE)
-        if 0 < eval_weight < 1:
+        evaluation, eval_loss = None, zero
+        if eval_weight > 0:
             evaluation, eval_loss = self.evaluation_head(x, eval_targets)
+        pred_probs, pred_loss = None, zero
+        if eval_weight < 1:
             if index is not None:
                 pred_probs, pred_loss = self.prediction_head(x, index=index, targets=pred_targets, split=split)
             else:
                 pred_probs, pred_loss = self.prediction_head(x, fen=fen, targets=pred_targets, split=split)
-        else:
-            pred_probs, pred_loss = None, zero
-            evaluation, eval_loss = None, zero
 
         if return_preds:
             return evaluation, pred_probs
@@ -96,9 +96,11 @@ class PredictionHead(nn.Module):
         super().__init__()
         self.trunk = nn.Sequential(
             nn.Conv2d(N_EMBD, CONV_CHANNELS, kernel_size=KERNEL_SIZE, padding=KERNEL_SIZE // 2),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Conv2d(CONV_CHANNELS, CONV_CHANNELS, kernel_size=KERNEL_SIZE, padding=KERNEL_SIZE // 2),
-            nn.ReLU()
+            nn.GELU(),
+            nn.Conv2d(CONV_CHANNELS, CONV_CHANNELS, kernel_size=1),
+            nn.GELU()
         )
         self.head = nn.Conv2d(CONV_CHANNELS, NUM_PLANES, kernel_size=1)
 
@@ -126,7 +128,12 @@ class PredictionHead(nn.Module):
 class EvalHead(nn.Module):
     def __init__(self):
         super().__init__()
-        self.eval_head = nn.Linear(N_EMBD, 1)
+        self.eval_head = nn.Sequential(
+            nn.Linear(N_EMBD, N_EMBD_EVAL),
+            nn.GELU(),
+            nn.Dropout(DROPOUT),
+            nn.Linear(N_EMBD_EVAL, 1)
+        )
 
     def forward(self, x, targets=None):
         # x -> (B,T,C), result of backbone.forward()
