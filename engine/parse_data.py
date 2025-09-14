@@ -231,6 +231,3 @@ def get_evals_json(log_freq):
     print(f"{num_games} games and {num_positions} positions processed in total!")
     with open("../data/evals.json", "w", encoding="utf-8") as f:
             json.dump(dataset, f, ensure_ascii=False, indent=2)
-
-if __name__ == '__main__':
-    get_evals_json(1000)

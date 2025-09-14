@@ -22,15 +22,22 @@ NUM_SAMPLES = 5 # number of samples taken as a test after model training
 
 # Hyperparameters used at search time
 PRED_WEIGHT = 0.075 # weight that is assigned to the probabilities spit out by the model
-MODEL_DEPTH = 3 # minimax depth of the model
-MAX_LINES = 5 # maximum number of candidate moves selected, ignoring captures and checks
+MODEL_DEPTH = 4 # minimax depth of the model
+MAX_LINES = 3 # maximum number of candidate moves selected, ignoring captures, checks, hanging pieces
 QUIESCENCE_DEPTH = 2 # additional depth added for quiescence after captures
+
+# Bonuses given for endgame heuristics
+SIMPLIFICATION_BONUS = 0.4
+PASSED_PAWN_BONUS = 0.1
+ROOK_BEHIND_PAWN_BONUS = 0.3
 
 # Numbers used for model training
 NUM_STEPS_PRETRAIN = 0 # number of steps used in model pretraining
 NUM_STEPS_FINETUNE = 250000 # number of steps used in model finetuning
 MAX_FINETUNE_EVAL_WEIGHT = 0.4 # maximum percentage of the total loss assigned to the evaluation model during finetuning
 LOSS_BENCH = 250 # number of steps inbetween loss benchmarking prints during optimization
+MIN_MATERIAL = 1000 # maximum material in which a position is considered 100% an endgame
+MAX_MATERIAL = 7000 # minimum material in which endgame heuristics are completely ignored
 
 # Pytorch device used for computations
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'

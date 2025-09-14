@@ -69,11 +69,22 @@ class TwoHeadTransformer(nn.Module):
     def __init__(self):
         super().__init__()
         self.backbone = TransformerBody()
+        self.material_proj = nn.Sequential(
+            nn.Linear(1, N_EMBD),
+            nn.GELU()
+        )
         self.prediction_head = PredictionHead()
         self.evaluation_head = EvalHead()
 
     def forward(self, pieces, colors, ttm, index=None, fen=None, eval_weight=0.5, pred_targets=None, eval_targets=None, return_preds=False, split='train'):
+        from main import compute_material_tensor
         x = self.backbone(pieces, colors, ttm)
+
+        # Add material balance to CLS token
+        B, T, C = x.shape
+        material_tensor = compute_material_tensor(index, split, fen, B) # (B, 1)
+        material_emb = self.material_proj(material_tensor) # (B, C)
+        x[:, 0, :] = x[:, 0, :] + material_emb
 
         zero = torch.tensor(0.0, device=DEVICE)
         evaluation, eval_loss = None, zero

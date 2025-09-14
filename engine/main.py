@@ -1,6 +1,7 @@
 import chess
 
-from engine.utils import move_to_plane, decode_all_predictions
+from engine.plane_utils import move_to_plane, decode_all_predictions
+from heuristics import fen_material_balance
 from parse_data import *
 from model import TwoHeadTransformer
 import matplotlib.pyplot as plt
@@ -178,6 +179,15 @@ def get_legal_move_mask(fens):
             mask[i, plane, fy, fx] = True
     return mask
 
+def compute_material_tensor(index, split, fen, batch_size):
+    if fen is None:
+        batch_fens = get_fens_for_lmm(index, split)
+        mats = [fen_material_balance(batch_fen) for batch_fen in batch_fens]
+    else:
+        mats = [fen_material_balance(fen)]
+    mat_tensor = torch.tensor(mats, dtype=torch.float32, device=DEVICE).view(batch_size, 1)
+    return mat_tensor / 10.0
+
 def train(model, num_steps, model_name='taparoni'):
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
     loss_log = []
@@ -219,8 +229,17 @@ def save_model_weights(model, path="../data/saved_weights.pt"):
 
 def train_new_model():
     model = TwoHeadTransformer().to(DEVICE)
-    _, pretrain_log = train(model, NUM_STEPS_PRETRAIN, model_name='pretrain')
-    graph(pretrain_log, LOSS_BENCH, zero_y_axis=True, graph_type='loss', model_title="pretrain")
+    weight_log, finetune_log = train(model, NUM_STEPS_FINETUNE, model_name='finetune')
+    graph(finetune_log, LOSS_BENCH, zero_y_axis=True, graph_type='loss', model_title="finetune")
+    graph(weight_log, LOSS_BENCH, graph_type='weight', model_title='finetune')
+    print("All training finished!")
+
+    save_model_weights(model)
+    test_loss(model, MAX_FINETUNE_EVAL_WEIGHT)
+    return model
+
+def continue_training_old_model():
+    model = load_old_model()
     weight_log, finetune_log = train(model, NUM_STEPS_FINETUNE, model_name='finetune')
     graph(finetune_log, LOSS_BENCH, zero_y_axis=True, graph_type='loss', model_title="finetune")
     graph(weight_log, LOSS_BENCH, graph_type='weight', model_title='finetune')

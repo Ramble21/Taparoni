@@ -1,8 +1,6 @@
 import math
-import chess
-
 from main import eval_fen, load_old_model
-from hyperparams import *
+from heuristics import *
 import chess.polyglot
 
 def evaluate_position(fen, threefold_lookup, model):
@@ -20,7 +18,7 @@ def evaluate_position(fen, threefold_lookup, model):
         evaluation, _ = eval_fen(fen, model)
         return evaluation, False
 
-def get_next_move(board, model, depth, max_lines, starting_position, TT, q_depth):
+def get_next_move(board, model, depth, max_lines, starting_position, TT, q_depth, root_depth):
 
     def init_lookup(final_board):
         lookup = {}
@@ -33,7 +31,7 @@ def get_next_move(board, model, depth, max_lines, starting_position, TT, q_depth
 
     fen = board.fen()
     threefold_lookup = init_lookup(board)
-    score, move = minimax(fen, threefold_lookup, model, depth, max_lines, float('-inf'), float('inf'), TT, q_depth, root=True)
+    score, move = minimax(fen, threefold_lookup, model, depth, max_lines, float('-inf'), float('inf'), TT, q_depth, root_depth, root=True)
     candidate_moves, _ = get_candidate_moves(fen, model, max_lines)
     return move, candidate_moves
 
@@ -102,7 +100,7 @@ def quiescence_search(fen, threefold_lookup, model, alpha, beta, q_depth):
                     return best
         return best
 
-def minimax(fen, threefold_lookup, model, depth, max_lines, alpha, beta, TT, q_depth, root=False):
+def minimax(fen, threefold_lookup, model, depth, max_lines, alpha, beta, TT, q_depth, root_depth, root=False):
     board = chess.Board(fen)
     key = chess.polyglot.zobrist_hash(board)
     orig_alpha, orig_beta = alpha, beta
@@ -134,9 +132,13 @@ def minimax(fen, threefold_lookup, model, depth, max_lines, alpha, beta, TT, q_d
 
     for i in range(len(candidate_moves)):
         mv_uci = candidate_moves[i]
-        board.push(chess.Move.from_uci(mv_uci))
+        move = chess.Move.from_uci(mv_uci)
+        endgame_lambda = lambda_value(board)
+        heuri_eval = heuristic_eval(board, move)
+        board.push(move)
         child_key = chess.polyglot.zobrist_hash(board)
-        value_unweighted, _ = minimax(board.fen(), threefold_lookup, model, depth-1, max_lines, alpha, beta, TT, q_depth, root=False)
+        value_raw, _ = minimax(board.fen(), threefold_lookup, model, depth-1, max_lines, alpha, beta, TT, q_depth, root_depth, root=False)
+        value_unweighted = value_raw + endgame_lambda * heuri_eval
         threefold_lookup[child_key] -= 1
         board.pop()
 
@@ -146,8 +148,8 @@ def minimax(fen, threefold_lookup, model, depth, max_lines, alpha, beta, TT, q_d
         if root:
             value_weighted = value_unweighted + (weight if white_to_move else -weight)
 
-        if depth == 3:
-            print(mv_uci, value_unweighted, prob, value_weighted)
+        if depth == root_depth:
+            print(f"depth={depth} -- {mv_uci}, raw={value_raw:.4f}, unw={value_unweighted:.4f}, prob={prob:.4f}, w={value_weighted:.4f}")
 
         if white_to_move:
             if value_weighted > best_value_weighted:
@@ -180,6 +182,7 @@ def minimax(fen, threefold_lookup, model, depth, max_lines, alpha, beta, TT, q_d
     return best_value_unweighted, best_move_unweighted
 
 def get_candidate_moves(fen, model, max_lines):
+    # top moves by raw preds
     _, move_preds = eval_fen(fen, model)
     moves, preds = zip(*move_preds)
     moves, preds = list(moves), list(preds)
@@ -188,6 +191,7 @@ def get_candidate_moves(fen, model, max_lines):
         moves_cut = moves[:max_lines]
         preds_cut = preds[:max_lines]
 
+    # tactical moves (checks and captures)
     board = chess.Board(fen)
     for move in board.legal_moves:
         if (board.is_capture(move) or board.gives_check(move)) and move.uci() not in moves_cut:
@@ -198,8 +202,27 @@ def get_candidate_moves(fen, model, max_lines):
                     found_pred = p
                     break
             if found_pred is None:
-                found_pred = 1e-8
+                found_pred = 0.001
             preds_cut.append(found_pred)
+
+    # hanging pieces safety net
+    engine_color = board.turn
+    attacked_squares = []
+    for sq, piece in board.piece_map().items():
+        if piece.color == engine_color and piece.piece_type != chess.PAWN:
+            if board.is_attacked_by(not engine_color, sq):
+                attacked_squares.append(sq)
+    for sq in attacked_squares:
+        piece_moves = [mv.uci() for mv in board.legal_moves if mv.from_square == sq]
+        moves_found = 0
+        for mv, pred in zip(moves, preds):
+            if moves_found >= 2:
+                break
+            if mv in piece_moves and mv not in moves_cut:
+                moves_found += 1
+                moves_cut.append(mv)
+                preds_cut.append(pred)
+
     # renormalize
     preds_cut = [pred / sum(preds_cut) for pred in preds_cut]
     return moves_cut, preds_cut
@@ -231,7 +254,7 @@ class Game:
         if self.board.is_game_over():
             print("Game over! Result:", self.board.result())
             return
-        best_move, candidate_moves = get_next_move(self.board, model=self.model, depth=self.model_depth, max_lines=self.max_lines, starting_position=self.starting_position, TT=self.TT, q_depth=self.q_depth)
+        best_move, candidate_moves = get_next_move(self.board, model=self.model, depth=self.model_depth, max_lines=self.max_lines, starting_position=self.starting_position, TT=self.TT, q_depth=self.q_depth, root_depth=self.model_depth)
         self.bot_candidate_moves = candidate_moves
         best_move = chess.Move.from_uci(best_move)
         san = self.board.san(best_move)
@@ -262,4 +285,4 @@ class Game:
 
 if __name__ == '__main__':
     m = load_old_model()
-    Game(m, bot_color='w', starting_position="")
+    Game(m, bot_color='w', starting_position="rn1k3r/pp3B2/3p2pp/8/3PNn2/2N2b2/PPP4P/2KR2R1 w - - 2 18")
