@@ -3,18 +3,18 @@ from hyperparams import *
 
 def material_val(piece):
     material_values = {
-        chess.PAWN: 100,
-        chess.KNIGHT: 320,
-        chess.BISHOP: 330,
-        chess.ROOK: 500,
-        chess.QUEEN: 900,
+        chess.PAWN: PAWN_VALUE,
+        chess.KNIGHT: KNIGHT_VALUE,
+        chess.BISHOP: BISHOP_VALUE,
+        chess.ROOK: ROOK_VALUE,
+        chess.QUEEN: QUEEN_VALUE,
         chess.KING: 0
     }
     return material_values[piece.piece_type]
 def fen_material_balance(fen):
     """
     Return material balance (white - black) in pawn units.
-    e.g. +9.0 means White up a queen.
+    e.g. -900 means Black up a queen.
     """
     board = chess.Board(fen)
     score = 0.0
@@ -32,7 +32,7 @@ def total_material(board):
     for square in chess.SQUARES:
         piece = board.piece_at(square)
         if piece is not None:
-            total += material_val(piece)
+            total += (material_val(piece) / 100)
     return total
 def is_passed_pawn(board, square):
     piece = board.piece_at(square)

@@ -3,8 +3,9 @@ import os
 import re
 import json
 import numpy as np
-from hyperparams import MAX_CENTIPAWNS
 
+from engine.heuristics import fen_material_balance
+from hyperparams import MAX_CENTIPAWNS
 
 def get_dataset():
     """
@@ -28,7 +29,7 @@ def get_dataset():
             data = json.load(f)
 
         features = [entry["fnn"] for entry in data]
-        evals = [entry["eval"] for entry in data]
+        evals = [entry["eval_positional"] for entry in data]
         preds = [entry['next_move'] for entry in data]
         np.savez(path, features=features, evals=evals, preds=preds)
         return features, evals, preds
@@ -179,11 +180,12 @@ def wnn_to_fen(wnn):
     fen_castle = decode_castle(castle_code)
     return f"{fen_board} {turn} {fen_castle} - 0 1"
 
-def get_evals_json(log_freq):
+def get_evals_json(log_freq=100):
     """
         Converts a .pgn file named "games_f.pgn" into a JSON named "evals.json"
         "fen_evals.json" contains a list of dictionaries containing every move from every game in
         "games_f.pgn" (as FENs) corresponding to the Stockfish evaluation of that position (in centipawns)
+        separated into the material balance and the positional balance (compensation, anti-compensation)
     """
     dataset = []
     mate_value = MAX_CENTIPAWNS
@@ -217,10 +219,14 @@ def get_evals_json(log_freq):
                         eval_value = -mate_value
                 value = int(eval_value)
                 if i + 1 < len(mainline_nodes):
+                    eval_material = fen_material_balance(board.fen())
+                    eval_positional = value - eval_material
                     next_move = mainline_nodes[i].move.uci()
                     dataset.append({
                         "fnn": board.fen(),
                         "eval": value,
+                        "eval_material": int(eval_material),
+                        "eval_positional": int(eval_positional),
                         "next_move": next_move
                     })
                     num_positions += 1

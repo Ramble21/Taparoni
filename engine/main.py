@@ -1,7 +1,6 @@
 import chess
 
 from engine.plane_utils import move_to_plane, decode_all_predictions
-from heuristics import fen_material_balance
 from parse_data import *
 from model import TwoHeadTransformer
 import matplotlib.pyplot as plt
@@ -140,10 +139,12 @@ def eval_fen(fen, model):
         pieces = torch.tensor(encode_pieces(wnn[:64]), dtype=torch.long, device=DEVICE)
         colors = torch.tensor(encode_colors(wnn[:64]), dtype=torch.long, device=DEVICE)
         ttm = torch.tensor(encode_ttm(wnn[64]), dtype=torch.long, device=DEVICE)
-        evaluation, pred_probs = model(pieces, colors, ttm, fen=fen, return_preds=True)
+        eval_position, pred_probs = model(pieces, colors, ttm, fen=fen, return_preds=True)
+        material_balance = fen_material_balance(fen)
+        eval_total = (10 * eval_position.item()) + (0.01 * material_balance)
 
         preds = decode_all_predictions(pred_probs, [fen])
-        return 10 * evaluation.item(), preds
+        return eval_total, preds
 
 def get_batch(split, size, return_fens=False):
     if split == 'train':
@@ -188,7 +189,7 @@ def compute_material_tensor(index, split, fen, batch_size):
     mat_tensor = torch.tensor(mats, dtype=torch.float32, device=DEVICE).view(batch_size, 1)
     return mat_tensor / 10.0
 
-def train(model, num_steps, model_name='taparoni'):
+def train(model, num_steps, model_name='taparoni', cosine_weighting=True):
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
     loss_log = []
     weight_log = []
@@ -197,6 +198,8 @@ def train(model, num_steps, model_name='taparoni'):
         pieces_batch, colors_batch, ttm_batch, eval_labels_batch, pred_labels_batch, index = get_batch('train', BATCH_SIZE)
         progress = i / num_steps
         current_eval_weight = 0 if model_name == 'pretrain' else MAX_FINETUNE_EVAL_WEIGHT * (0.5 - 0.5 * math.cos(math.pi * progress))
+        if not cosine_weighting:
+            current_eval_weight = MAX_FINETUNE_EVAL_WEIGHT
         loss = model(pieces_batch, colors_batch, ttm_batch, index=index, eval_weight=current_eval_weight,
                      pred_targets=pred_labels_batch, eval_targets=eval_labels_batch, split='train')
         # Backward pass
@@ -210,6 +213,9 @@ def train(model, num_steps, model_name='taparoni'):
             recent_losses = loss_log[-LOSS_BENCH:]
             approx_loss = sum(recent_losses) / len(recent_losses)
             print(f"{i} / {num_steps}: bucket loss={approx_loss:.4f}")
+        # Training save checkpoints
+        if i % TRN_SC == 0:
+            save_model_weights(model)
 
     model.eval()
     print(f"model.{model_name} training finished!")
@@ -226,6 +232,7 @@ def load_saved_weights(path="../data/saved_weights.pt"):
 
 def save_model_weights(model, path="../data/saved_weights.pt"):
     torch.save(model.state_dict(), path)
+    print("Weights successfully saved!")
 
 def train_new_model():
     model = TwoHeadTransformer().to(DEVICE)
@@ -240,7 +247,7 @@ def train_new_model():
 
 def continue_training_old_model():
     model = load_old_model()
-    weight_log, finetune_log = train(model, NUM_STEPS_FINETUNE, model_name='finetune')
+    weight_log, finetune_log = train(model, NUM_STEPS_FINETUNE, model_name='finetune', cosine_weighting=False)
     graph(finetune_log, LOSS_BENCH, zero_y_axis=True, graph_type='loss', model_title="finetune")
     graph(weight_log, LOSS_BENCH, graph_type='weight', model_title='finetune')
     print("All training finished!")
