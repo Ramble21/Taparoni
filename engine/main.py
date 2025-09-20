@@ -1,5 +1,6 @@
 import chess
 
+from engine.heuristics import fen_material_balance
 from engine.plane_utils import move_to_plane, decode_all_predictions
 from parse_data import *
 from model import TwoHeadTransformer
@@ -139,12 +140,10 @@ def eval_fen(fen, model):
         pieces = torch.tensor(encode_pieces(wnn[:64]), dtype=torch.long, device=DEVICE)
         colors = torch.tensor(encode_colors(wnn[:64]), dtype=torch.long, device=DEVICE)
         ttm = torch.tensor(encode_ttm(wnn[64]), dtype=torch.long, device=DEVICE)
-        eval_position, pred_probs = model(pieces, colors, ttm, fen=fen, return_preds=True)
-        material_balance = fen_material_balance(fen)
-        eval_total = (10 * eval_position.item()) + (0.01 * material_balance)
+        evaluation, pred_probs = model(pieces, colors, ttm, fen=fen, return_preds=True)
 
         preds = decode_all_predictions(pred_probs, [fen])
-        return eval_total, preds
+        return 10 * evaluation.item(), preds
 
 def get_batch(split, size, return_fens=False):
     if split == 'train':
