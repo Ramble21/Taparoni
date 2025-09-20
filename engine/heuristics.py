@@ -13,8 +13,7 @@ def material_val(piece):
     return material_values[piece.piece_type]
 def fen_material_balance(fen):
     """
-    Return material balance (white - black) in pawn units.
-    e.g. -900 means Black up a queen.
+    Returns material balance in centipawns (e.g. -100 means Black up a pawn)
     """
     board = chess.Board(fen)
     score = 0.0
@@ -24,7 +23,7 @@ def fen_material_balance(fen):
     return score
 def total_material(board):
     """
-    Return total material on the board
+    Returns total material on the board
     (e.g. an endgame with 1 black pawn and 1 white pawn will return 2)
     Kings excluded
     """

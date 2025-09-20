@@ -33,93 +33,90 @@ def get_next_move(board, model, depth, max_lines, starting_position, TT, q_depth
     threefold_lookup = init_lookup(board)
     score, move = minimax(fen=fen, threefold_lookup=threefold_lookup, model=model, depth=depth,
                           max_lines=max_lines, alpha=float('-inf'), beta=float('inf'), TT=TT,
-                          q_depth=q_depth, root_depth=root_depth, root=True)
+                          q_depth=q_depth, root_depth=root_depth)
     candidate_moves, _ = get_candidate_moves(fen, model, max_lines)
     return move, candidate_moves
 
-def minimax(fen, threefold_lookup, model, depth, max_lines, alpha, beta, TT, q_depth, root_depth, root=False):
+def minimax(fen, threefold_lookup, model, depth, max_lines, alpha, beta, TT, q_depth, root_depth):
     board = chess.Board(fen)
     key = chess.polyglot.zobrist_hash(board)
     orig_alpha, orig_beta = alpha, beta
     threefold_lookup[key] = threefold_lookup.get(key, 0) + 1
 
-    if key in TT:
-        entry = TT[key]
-        if entry['depth'] >= depth:
-            if entry['flag'] == 'EXACT':
-                return entry['value'], entry.get('best_move', None)
-            if entry['flag'] == 'LOWERBOUND':
-                alpha = max(alpha, entry['value'])
-            elif entry['flag'] == 'UPPERBOUND':
-                beta = min(beta, entry['value'])
-            if alpha >= beta:
-                return entry['value'], entry.get('best_move', None)
+    try:
+        if key in TT:
+            entry = TT[key]
+            if entry['depth'] >= depth:
+                if entry['flag'] == 'EXACT':
+                    return entry['value'], entry.get('best_move', None)
+                if entry['flag'] == 'LOWERBOUND':
+                    alpha = max(alpha, entry['value'])
+                elif entry['flag'] == 'UPPERBOUND':
+                    beta = min(beta, entry['value'])
+                if alpha >= beta:
+                    if entry['flag'] == 'LOWERBOUND':
+                        return alpha, entry.get('best_move', None)
+                    else:
+                        return beta, entry.get('best_move', None)
 
-    if depth == 0 or board.is_game_over(claim_draw=True) or threefold_lookup[key] >= 3:
-        value = quiescence_search(fen=fen, threefold_lookup=threefold_lookup, model=model,
-                                  alpha=alpha, beta=beta, q_depth=q_depth)
-        return value, None
+        if depth == 0 or board.is_game_over(claim_draw=True) or threefold_lookup[key] >= 3:
+            value = quiescence_search(fen=fen, threefold_lookup=threefold_lookup, model=model,
+                                      alpha=alpha, beta=beta, q_depth=q_depth)
+            return value, None
 
-    candidate_moves, candidate_preds = get_candidate_moves(fen, model, max_lines)
-    white_to_move = board.turn == chess.WHITE
+        candidate_moves, candidate_preds = get_candidate_moves(fen, model, max_lines)
+        white_to_move = board.turn == chess.WHITE
 
-    best_value_unweighted = float('-inf') if white_to_move else float('inf')
-    best_value_weighted = float('-inf') if white_to_move else float('inf')
-    best_move_weighted = None
-    best_move_unweighted = None
+        best_value_weighted = float('-inf') if white_to_move else float('inf')
+        best_move_weighted = None
 
-    for i in range(len(candidate_moves)):
-        mv_uci = candidate_moves[i]
-        move = chess.Move.from_uci(mv_uci)
-        endgame_lambda = lambda_value(board)
-        heuri_eval = heuristic_eval(board, move)
-        board.push(move)
-        child_key = chess.polyglot.zobrist_hash(board)
-        value_raw, _ = minimax(fen=board.fen(), threefold_lookup=threefold_lookup, model=model,
-                               depth=depth-1, max_lines=max_lines, alpha=alpha, beta=beta, TT=TT,
-                               q_depth=q_depth, root_depth=root_depth, root=False)
-        value_unweighted = value_raw + endgame_lambda * heuri_eval
-        threefold_lookup[child_key] -= 1
-        board.pop()
+        for i in range(len(candidate_moves)):
+            mv_uci = candidate_moves[i]
+            move = chess.Move.from_uci(mv_uci)
+            endgame_lambda = lambda_value(board)
+            heuri_eval = heuristic_eval(board, move)
+            board.push(move)
+            value_raw, _ = minimax(fen=board.fen(), threefold_lookup=threefold_lookup, model=model,
+                                   depth=depth-1, max_lines=max_lines, alpha=alpha, beta=beta, TT=TT,
+                                   q_depth=q_depth, root_depth=root_depth)
+            value_unweighted = value_raw + endgame_lambda * heuri_eval
+            board.pop()
 
-        prob = candidate_preds[i]
-        weight = PRED_WEIGHT * math.log(max(prob, 1e-8))
-        value_weighted = value_unweighted
-        if root:
+            prob = candidate_preds[i]
+            weight = PRED_WEIGHT * math.log(prob)
             value_weighted = value_unweighted + (weight if white_to_move else -weight)
 
-        if depth == root_depth or depth == root_depth - 1:
-            print(f"depth={depth} -- {mv_uci}, raw={value_raw:.4f}, unw={value_unweighted:.4f}, prob={prob:.4f}, w={value_weighted:.4f}")
+            if depth == root_depth:
+                print(f"depth={depth} -- {mv_uci}, unw={value_unweighted:.3f}, weight={weight:.3f}, prob={prob:.3f}, w={value_weighted:.3f}")
 
-        if white_to_move:
-            if value_weighted > best_value_weighted:
-                best_value_weighted, best_move_weighted = value_weighted, mv_uci
-            if value_unweighted > best_value_unweighted:
-                best_value_unweighted, best_move_unweighted = value_unweighted, mv_uci
-            alpha = max(alpha, value_unweighted)
+            if white_to_move:
+                if value_weighted > best_value_weighted:
+                    best_value_weighted, best_move_weighted = value_weighted, mv_uci
+                    alpha = max(alpha, value_weighted)
+            else:
+                if value_weighted < best_value_weighted:
+                    best_value_weighted, best_move_weighted = value_weighted, mv_uci
+                    beta = min(beta, value_weighted)
+            if beta <= alpha:
+                break
+
+        if best_value_weighted <= orig_alpha:
+            flag = 'UPPERBOUND'
+        elif best_value_weighted >= orig_beta:
+            flag = 'LOWERBOUND'
         else:
-            if value_weighted < best_value_weighted:
-                best_value_weighted, best_move_weighted = value_weighted, mv_uci
-            if value_unweighted < best_value_unweighted:
-                best_value_unweighted, best_move_unweighted = value_unweighted, mv_uci
-            beta = min(beta, value_unweighted)
-        if beta <= alpha:
-            break
-    if best_value_unweighted <= orig_alpha:
-        flag = 'UPPERBOUND'
-    elif best_value_unweighted >= orig_beta:
-        flag = 'LOWERBOUND'
-    else:
-        flag = 'EXACT'
-    TT[key] = {
-        'depth': depth,
-        'value': best_value_unweighted,
-        'flag': flag,
-        'best_move': best_move_unweighted
-    }
-    if root:
+            flag = 'EXACT'
+        TT[key] = {
+            'depth': depth,
+            'value': best_value_weighted,
+            'flag': flag,
+            'best_move': best_move_weighted
+        }
         return best_value_weighted, best_move_weighted
-    return best_value_unweighted, best_move_unweighted
+    finally:
+        threefold_lookup[key] -= 1
+        if threefold_lookup[key] <= 0:
+            del threefold_lookup[key]
 
 def quiescence_search(fen, threefold_lookup, model, alpha, beta, q_depth):
     eval_raw, game_over = evaluate_position(fen, threefold_lookup, model)
@@ -200,28 +197,38 @@ def get_candidate_moves(fen, model, max_lines):
     board = chess.Board(fen)
     for move in board.legal_moves:
         if (board.is_capture(move) or board.gives_check(move)) and move.uci() not in moves_cut:
+            target_square = move.to_square
+            is_defended = board.is_attacked_by(not board.turn, target_square)
+            piece = None if not board.is_capture(move) else chess.Piece(chess.PAWN, not board.turn) if board.is_en_passant(move) else board.piece_at(target_square)
+            if board.is_capture(move) and not board.gives_check(move) and piece == chess.PAWN and not is_defended:
+                # don't include capturing defended pawns as a tactical move
+                continue
             moves_cut.append(move.uci())
-            found_pred = None
-            for m_uci, p in zip(moves, preds):
-                if m_uci == move.uci():
-                    found_pred = p
-                    break
-            if found_pred is None:
-                found_pred = 0.001
+            if board.is_capture(move) and not is_defended:
+                found_pred = 0.00075 * material_val(piece)
+            else:
+                found_pred = 0.01
+                for m_uci, p in zip(moves, preds):
+                    if m_uci == move.uci():
+                        found_pred = p
+                        break
             preds_cut.append(found_pred)
 
     # hanging pieces safety net
     engine_color = board.turn
     attacked_squares = []
     for sq, piece in board.piece_map().items():
-        if piece.color == engine_color and piece.piece_type != chess.PAWN:
+        if piece.color == engine_color:
+            if piece.piece_type == chess.PAWN and board.is_attacked_by(engine_color, sq):
+                # don't include defended pawns as hanging pieces
+                continue
             if board.is_attacked_by(not engine_color, sq):
                 attacked_squares.append(sq)
     for sq in attacked_squares:
         piece_moves = [mv.uci() for mv in board.legal_moves if mv.from_square == sq]
         moves_found = 0
         for mv, pred in zip(moves, preds):
-            if moves_found >= 2:
+            if moves_found >= HP_SN_MAX:
                 break
             if mv in piece_moves and mv not in moves_cut:
                 moves_found += 1
@@ -290,4 +297,4 @@ class Game:
 
 if __name__ == '__main__':
     m = load_old_model()
-    Game(m, bot_color='w', starting_position="rn2kbnr/pQ3q2/3p3p/1b2P1p1/5B2/2P3R1/PP1N1P1P/R3K3 w Qkq - 0 18")
+    Game(m, bot_color='w', starting_position="")
