@@ -1,35 +1,10 @@
 import math
-from main import eval_boards, load_old_model
+from main import eval_fen, load_old_model
 from heuristics import *
 import chess.polyglot
 
-def eval_boards_memoized(boards, model, eval_cache):
-    uncached_boards = []
-    uncached_keys = []
-    results = {}
-    for board in boards:
-        key = chess.polyglot.zobrist_hash(board)
-        if key in eval_cache:
-            results[key] = eval_cache.get(key)
-        else:
-            uncached_boards.append(board)
-            uncached_keys.append(key)
-
-    if uncached_boards:
-        evs, preds = eval_boards(uncached_boards, model)
-        for key, ev, pred in zip(uncached_keys, evs, preds):
-            eval_cache[key] = (ev, pred)
-            results[key] = (ev, pred)
-
-    evs_out, preds_out = [], []
-    for board in boards:
-        key = chess.polyglot.zobrist_hash(board)
-        ev, pred = results[key]
-        evs_out.append(ev)
-        preds_out.append(pred)
-    return evs_out, preds_out
-
-def evaluate_position(board, threefold_lookup, model, eval_cache):
+def evaluate_position(fen, threefold_lookup, model):
+    board = chess.Board(fen)
     key = chess.polyglot.zobrist_hash(board)
     if board.is_checkmate():
         halfmove_number = board.fullmove_number * 2 - (0 if board.turn == chess.WHITE else 1)
@@ -40,22 +15,10 @@ def evaluate_position(board, threefold_lookup, model, eval_cache):
     elif board.is_stalemate() or board.is_insufficient_material() or board.can_claim_fifty_moves() or threefold_lookup[key] >= 3:
         return 0, True
     else:
-        evaluation, _ = eval_boards_memoized([board], model, eval_cache)
-        return evaluation[0], False
+        evaluation, _ = eval_fen(fen, model)
+        return evaluation, False
 
-def get_child_eval_batch(board, model, eval_cache):
-    child_boards = []
-    child_fens = []
-    for move in list(board.legal_moves):
-        board.push(move)
-        child_boards.append(board.copy())
-        child_fens.append(board.fen())
-        board.pop()
-    child_batch_evals, child_batch_preds = eval_boards_memoized(child_boards, model, eval_cache)
-    child_batch = [(fen, ev, pred) for fen, ev, pred in zip(child_fens, child_batch_evals, child_batch_preds)]
-    return child_batch
-
-def get_next_move(board, model, depth, max_lines, starting_position, TT, eval_cache, q_depth, root_depth):
+def get_next_move(board, model, depth, max_lines, starting_position, TT, q_depth, root_depth):
 
     def init_lookup(final_board):
         lookup = {}
@@ -67,13 +30,13 @@ def get_next_move(board, model, depth, max_lines, starting_position, TT, eval_ca
         return lookup
 
     threefold_lookup = init_lookup(board)
-
     score, move = minimax(board=board, threefold_lookup=threefold_lookup, model=model, depth=depth,
                           max_lines=max_lines, alpha=float('-inf'), beta=float('inf'), TT=TT,
-                          eval_cache=eval_cache, q_depth=q_depth, root_depth=root_depth, eval_batch=None)
-    return move
+                          q_depth=q_depth, root_depth=root_depth)
+    candidate_moves, _ = get_candidate_moves(board, model, max_lines)
+    return move, candidate_moves
 
-def minimax(board, threefold_lookup, model, depth, max_lines, alpha, beta, TT, eval_cache, q_depth, root_depth, eval_batch):
+def minimax(board, threefold_lookup, model, depth, max_lines, alpha, beta, TT, q_depth, root_depth):
     key = chess.polyglot.zobrist_hash(board)
     orig_alpha, orig_beta = alpha, beta
     threefold_lookup[key] = threefold_lookup.get(key, 0) + 1
@@ -96,15 +59,11 @@ def minimax(board, threefold_lookup, model, depth, max_lines, alpha, beta, TT, e
 
         if depth == 0 or board.is_game_over(claim_draw=True) or threefold_lookup[key] >= 3:
             value = quiescence_search(board=board, threefold_lookup=threefold_lookup, model=model,
-                                      alpha=alpha, beta=beta, q_depth=q_depth, eval_cache=eval_cache)
+                                      alpha=alpha, beta=beta, q_depth=q_depth)
             return value, None
 
-        candidate_moves, candidate_preds, eval_set = get_candidate_moves(board, eval_batch, max_lines, model, eval_cache)
+        candidate_moves, candidate_preds = get_candidate_moves(board, model, max_lines)
         white_to_move = board.turn == chess.WHITE
-        if key in TT and TT[key].get('best_move') in candidate_moves:
-            candidate_moves.remove(TT[key]['best_move'])
-            candidate_moves.insert(0, TT[key]['best_move'])
-        child_eval_batch = get_child_eval_batch(board, model, eval_cache)
 
         best_value_weighted = float('-inf') if white_to_move else float('inf')
         best_move_weighted = None
@@ -114,11 +73,10 @@ def minimax(board, threefold_lookup, model, depth, max_lines, alpha, beta, TT, e
             move = chess.Move.from_uci(mv_uci)
             endgame_lambda = lambda_value(board)
             heuri_eval = heuristic_eval(board, move)
-
             board.push(move)
             value_raw, _ = minimax(board=board, threefold_lookup=threefold_lookup, model=model,
                                    depth=depth-1, max_lines=max_lines, alpha=alpha, beta=beta, TT=TT,
-                                   eval_cache=eval_cache, q_depth=q_depth, root_depth=root_depth, eval_batch=child_eval_batch)
+                                   q_depth=q_depth, root_depth=root_depth)
             value_unweighted = value_raw + endgame_lambda * heuri_eval
             board.pop()
 
@@ -150,8 +108,7 @@ def minimax(board, threefold_lookup, model, depth, max_lines, alpha, beta, TT, e
             'depth': depth,
             'value': best_value_weighted,
             'flag': flag,
-            'best_move': best_move_weighted,
-            'eval_set': eval_set
+            'best_move': best_move_weighted
         }
         return best_value_weighted, best_move_weighted
     finally:
@@ -159,8 +116,8 @@ def minimax(board, threefold_lookup, model, depth, max_lines, alpha, beta, TT, e
         if threefold_lookup[key] <= 0:
             del threefold_lookup[key]
 
-def quiescence_search(board, threefold_lookup, model, alpha, beta, q_depth, eval_cache):
-    eval_raw, game_over = evaluate_position(board, threefold_lookup, model, eval_cache)
+def quiescence_search(board, threefold_lookup, model, alpha, beta, q_depth):
+    eval_raw, game_over = evaluate_position(board.fen(), threefold_lookup, model)
 
     if q_depth <= 0 or game_over:
         return eval_raw
@@ -196,7 +153,7 @@ def quiescence_search(board, threefold_lookup, model, alpha, beta, q_depth, eval
             board.push(mv)
             key = chess.polyglot.zobrist_hash(board)
             threefold_lookup[key] = threefold_lookup.get(key, 0) + 1
-            score = quiescence_search(board, threefold_lookup, model, best, beta, q_depth - 1, eval_cache)
+            score = quiescence_search(board, threefold_lookup, model, best, beta, q_depth - 1)
             threefold_lookup[key] -= 1
             board.pop()
             if score > best:
@@ -214,7 +171,7 @@ def quiescence_search(board, threefold_lookup, model, alpha, beta, q_depth, eval
             board.push(mv)
             key = chess.polyglot.zobrist_hash(board)
             threefold_lookup[key] = threefold_lookup.get(key, 0) + 1
-            score = quiescence_search(board, threefold_lookup, model, alpha, best, q_depth - 1, eval_cache)
+            score = quiescence_search(board, threefold_lookup, model, alpha, best, q_depth - 1)
             threefold_lookup[key] -= 1
             board.pop()
             if score < best:
@@ -223,27 +180,15 @@ def quiescence_search(board, threefold_lookup, model, alpha, beta, q_depth, eval
                     return best
         return best
 
-def get_candidate_moves(board, eval_batch, max_lines, model, eval_cache):
-    move_preds, ev_set = None, None
-
-    if eval_batch is not None:
-        for eval_set in eval_batch:
-            if eval_set[0] == board.fen():
-                _, _, move_preds = eval_set
-                ev_set = eval_set
-                break
-        if move_preds is None:
-            raise RuntimeError("big bug")
-    else:
-        _, move_preds = eval_boards_memoized([board], model, eval_cache)
-
+def get_candidate_moves(board, model, max_lines):
+    # top moves by raw preds
+    _, move_preds = eval_fen(board.fen(), model)
     moves, preds = zip(*move_preds)
     moves, preds = list(moves), list(preds)
+    moves_cut, preds_cut = moves, preds
     if max_lines is not None:
         moves_cut = moves[:max_lines]
         preds_cut = preds[:max_lines]
-    else:
-        moves_cut, preds_cut = moves, preds
 
     # tactical moves (checks and captures)
     for move in board.legal_moves:
@@ -256,7 +201,7 @@ def get_candidate_moves(board, eval_batch, max_lines, model, eval_cache):
                 continue
             moves_cut.append(move.uci())
             if board.is_capture(move) and not is_defended:
-                found_pred = HANGING_PIECE_PROB * material_val(piece)
+                found_pred = 0.00075 * material_val(piece)
             else:
                 found_pred = 0.01
                 for m_uci, p in zip(moves, preds):
@@ -288,7 +233,7 @@ def get_candidate_moves(board, eval_batch, max_lines, model, eval_cache):
 
     # renormalize
     preds_cut = [pred / sum(preds_cut) for pred in preds_cut]
-    return moves_cut, preds_cut, ev_set
+    return moves_cut, preds_cut
 
 class Game:
 
@@ -303,9 +248,9 @@ class Game:
         self.model = model
         self.max_lines = MAX_LINES
         self.starting_position = starting_position
+        self.bot_candidate_moves = []
         self.q_depth = QUIESCENCE_DEPTH
         self.TT = {}
-        self.eval_cache = {}
         if self.bot_color == 'w':
             print("Bot is playing the white pieces, and will make the first move.")
             self.bot_move()
@@ -317,9 +262,8 @@ class Game:
         if self.board.is_game_over():
             print("Game over! Result:", self.board.result())
             return
-        best_move = get_next_move(self.board, model=self.model, depth=self.model_depth, max_lines=self.max_lines,
-                                  starting_position=self.starting_position, TT=self.TT, eval_cache=self.eval_cache,
-                                  q_depth=self.q_depth, root_depth=self.model_depth)
+        best_move, candidate_moves = get_next_move(self.board, model=self.model, depth=self.model_depth, max_lines=self.max_lines, starting_position=self.starting_position, TT=self.TT, q_depth=self.q_depth, root_depth=self.model_depth)
+        self.bot_candidate_moves = candidate_moves
         best_move = chess.Move.from_uci(best_move)
         san = self.board.san(best_move)
         self.board.push(best_move)
@@ -334,6 +278,9 @@ class Game:
         while True:
             user_input = input("Your move in UCI notation: ")
             try:
+                if user_input == 'show_moves':
+                    print(self.bot_candidate_moves)
+                    continue
                 move = chess.Move.from_uci(user_input)
                 if move in self.board.legal_moves:
                     self.board.push(move)
@@ -346,4 +293,4 @@ class Game:
 
 if __name__ == '__main__':
     m = load_old_model()
-    Game(m, bot_color='w', starting_position="")
+    Game(m, bot_color='w', starting_position="6k1/2RN3p/pp6/6B1/1n6/8/PPb4P/2K5 w - - 0 29")
