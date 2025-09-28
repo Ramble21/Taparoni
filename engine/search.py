@@ -3,7 +3,7 @@ from main import eval_board, load_old_model
 from heuristics import *
 import chess.polyglot
 
-def evaluate_position(board, threefold_lookup, model):
+def evaluate_position(board, evaluation, threefold_lookup):
     key = chess.polyglot.zobrist_hash(board)
     if board.is_checkmate():
         halfmove_number = board.fullmove_number * 2 - (0 if board.turn == chess.WHITE else 1)
@@ -14,10 +14,9 @@ def evaluate_position(board, threefold_lookup, model):
     elif board.is_stalemate() or board.is_insufficient_material() or board.can_claim_fifty_moves() or threefold_lookup[key] >= 3:
         return 0, True
     else:
-        evaluation, _ = eval_board(board, model)
         return evaluation, False
 
-def get_next_move(board, model, depth, max_lines, starting_position, TT, q_depth, root_depth):
+def get_next_move(board, model, depth, max_lines, starting_position, TT, eval_cache, q_depth, root_depth):
 
     def init_lookup(final_board):
         lookup = {}
@@ -31,10 +30,20 @@ def get_next_move(board, model, depth, max_lines, starting_position, TT, q_depth
     threefold_lookup = init_lookup(board)
     score, move = minimax(board=board, threefold_lookup=threefold_lookup, model=model, depth=depth,
                           max_lines=max_lines, alpha=float('-inf'), beta=float('inf'), TT=TT,
-                          q_depth=q_depth, root_depth=root_depth)
+                          eval_cache=eval_cache, q_depth=q_depth, root_depth=root_depth)
     return move
 
-def minimax(board, threefold_lookup, model, depth, max_lines, alpha, beta, TT, q_depth, root_depth):
+def get_board_eval(board, key, eval_cache, model):
+    if key in eval_cache:
+        return eval_cache[key]['eval'], eval_cache[key]['preds']
+    evaluation, move_preds = eval_board(board, model)
+    eval_cache[key] = {
+        'eval': evaluation,
+        'preds': move_preds
+    }
+    return eval_cache[key]['eval'], eval_cache[key]['preds']
+
+def minimax(board, threefold_lookup, model, depth, max_lines, alpha, beta, TT, eval_cache, q_depth, root_depth):
     key = chess.polyglot.zobrist_hash(board)
     orig_alpha, orig_beta = alpha, beta
     threefold_lookup[key] = threefold_lookup.get(key, 0) + 1
@@ -55,13 +64,16 @@ def minimax(board, threefold_lookup, model, depth, max_lines, alpha, beta, TT, q
                     else:
                         return beta, entry.get('best_move', None)
 
+        evaluation, move_preds = get_board_eval(board, key, eval_cache, model)
+
         if depth == 0 or board.is_game_over(claim_draw=True) or threefold_lookup[key] >= 3:
-            value = quiescence_search(board=board, threefold_lookup=threefold_lookup, model=model,
-                                      alpha=alpha, beta=beta, q_depth=q_depth)
+            value = quiescence_search(board=board, evaluation=evaluation, threefold_lookup=threefold_lookup,
+                                      eval_cache=eval_cache, model=model, alpha=alpha, beta=beta, q_depth=q_depth)
             return value, None
 
-        candidate_moves, candidate_preds = get_candidate_moves(board, model, max_lines)
+        candidate_moves, candidate_preds = get_candidate_moves(board, move_preds, max_lines)
         white_to_move = board.turn == chess.WHITE
+        endgame_lambda = lambda_value(board)
 
         if key in TT and TT[key].get("best_move") in candidate_moves:
             best = TT[key]["best_move"]
@@ -78,12 +90,12 @@ def minimax(board, threefold_lookup, model, depth, max_lines, alpha, beta, TT, q
         for i in range(len(candidate_moves)):
             mv_uci = candidate_moves[i]
             move = chess.Move.from_uci(mv_uci)
-            endgame_lambda = lambda_value(board)
             heuri_eval = heuristic_eval(board, move)
+
             board.push(move)
             value_raw, _ = minimax(board=board, threefold_lookup=threefold_lookup, model=model,
                                    depth=depth-1, max_lines=max_lines, alpha=alpha, beta=beta, TT=TT,
-                                   q_depth=q_depth, root_depth=root_depth)
+                                   eval_cache=eval_cache, q_depth=q_depth, root_depth=root_depth)
             value_unweighted = value_raw + endgame_lambda * heuri_eval
             board.pop()
 
@@ -120,8 +132,8 @@ def minimax(board, threefold_lookup, model, depth, max_lines, alpha, beta, TT, q
         if threefold_lookup[key] <= 0:
             del threefold_lookup[key]
 
-def quiescence_search(board, threefold_lookup, model, alpha, beta, q_depth):
-    eval_raw, game_over = evaluate_position(board, threefold_lookup, model)
+def quiescence_search(board, evaluation, threefold_lookup, eval_cache, model, alpha, beta, q_depth):
+    eval_raw, game_over = evaluate_position(board, evaluation, threefold_lookup)
 
     if q_depth <= 0 or game_over:
         return eval_raw
@@ -130,19 +142,16 @@ def quiescence_search(board, threefold_lookup, model, alpha, beta, q_depth):
     if not forcing:
         return eval_raw
 
-    def piece_val(pt):
-        return {chess.PAWN:1, chess.KNIGHT:3, chess.BISHOP:3, chess.ROOK:5, chess.QUEEN:9}.get(pt, 0)
-
     def score_move(move):
         check_flag = 1 if board.gives_check(move) else 0
         cap_val = 0
         if board.is_capture(move):
             if board.is_en_passant(move):
-                cap_val = 1
+                cap_val = PAWN_VALUE
             else:
                 cap_piece = board.piece_at(move.to_square)
-                cap_val = piece_val(cap_piece.piece_type) if cap_piece else 0
-        promo_bonus = 8 if move.promotion else 0
+                cap_val = material_val(cap_piece) if cap_piece else 0
+        promo_bonus = (QUEEN_VALUE-PAWN_VALUE) if move.promotion else 0
         return check_flag, cap_val + promo_bonus
 
     forcing.sort(key=score_move, reverse=True)
@@ -156,8 +165,9 @@ def quiescence_search(board, threefold_lookup, model, alpha, beta, q_depth):
         for mv in forcing:
             board.push(mv)
             key = chess.polyglot.zobrist_hash(board)
+            child_eval, _ = get_board_eval(board, key, eval_cache, model)
             threefold_lookup[key] = threefold_lookup.get(key, 0) + 1
-            score = quiescence_search(board, threefold_lookup, model, best, beta, q_depth - 1)
+            score = quiescence_search(board, child_eval, threefold_lookup, eval_cache, model, best, beta, q_depth - 1)
             threefold_lookup[key] -= 1
             board.pop()
             if score > best:
@@ -174,8 +184,9 @@ def quiescence_search(board, threefold_lookup, model, alpha, beta, q_depth):
         for mv in forcing:
             board.push(mv)
             key = chess.polyglot.zobrist_hash(board)
+            child_eval, _ = get_board_eval(board, key, eval_cache, model)
             threefold_lookup[key] = threefold_lookup.get(key, 0) + 1
-            score = quiescence_search(board, threefold_lookup, model, alpha, best, q_depth - 1)
+            score = quiescence_search(board, child_eval, threefold_lookup, eval_cache, model, alpha, best, q_depth - 1)
             threefold_lookup[key] -= 1
             board.pop()
             if score < best:
@@ -184,9 +195,8 @@ def quiescence_search(board, threefold_lookup, model, alpha, beta, q_depth):
                     return best
         return best
 
-def get_candidate_moves(board, model, max_lines):
+def get_candidate_moves(board, move_preds, max_lines):
     # top moves by raw preds
-    _, move_preds = eval_board(board, model)
     moves, preds = zip(*move_preds)
     moves, preds = list(moves), list(preds)
     moves_cut, preds_cut = moves, preds
@@ -255,6 +265,7 @@ class Game:
         self.bot_candidate_moves = []
         self.q_depth = QUIESCENCE_DEPTH
         self.TT = {}
+        self.eval_cache = {}
         if self.bot_color == 'w':
             print("Bot is playing the white pieces, and will make the first move.")
             self.bot_move()
@@ -269,7 +280,8 @@ class Game:
         depth = 1
         best_move = None
         while depth <= self.model_depth:
-            best_move = get_next_move(self.board, model=self.model, depth=depth, max_lines=self.max_lines, starting_position=self.starting_position, TT=self.TT, q_depth=self.q_depth, root_depth=depth)
+            best_move = get_next_move(self.board, model=self.model, depth=depth, max_lines=self.max_lines, starting_position=self.starting_position,
+                                      TT=self.TT, eval_cache=self.eval_cache, q_depth=self.q_depth, root_depth=depth)
             key = chess.polyglot.zobrist_hash(self.board)
             print(f"depth={depth}: best move={best_move}, eval={self.TT[key]['value']:.4f}")
             depth += 1

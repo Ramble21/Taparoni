@@ -169,7 +169,6 @@ def encode_board(board):
 def eval_board(board, model):
     pieces, colors, ttm = encode_board(board)
 
-    model.eval()
     with torch.no_grad():
         evaluation, pred_probs = model(pieces, colors, ttm, board=board, return_preds=True)
         preds = decode_all_predictions(pred_probs, [board])

@@ -1,4 +1,8 @@
 import chess
+
+from engine.hyperparams import MAX_LINES
+
+
 def move_to_plane(move: chess.Move, white_to_move):
     """
     0-6 = moving forward 1-7 spaces from perspective (e2e4 is forward for white, e7e5 is forward for black)
@@ -111,7 +115,8 @@ def decode_all_predictions(probs, boards):
     B = probs.shape[0]
     results = []
     # sort from highest to lowest prob
-    sorted_idx = probs.argsort(dim=1, descending=True) # (B, 67*64)
+    values, indices = probs.topk(MAX_LINES * 2, dim=1, largest=True, sorted=True)
+    sorted_idx = indices
 
     for b in range(B):
         nonzero = [i for i in sorted_idx[b].tolist() if probs[b, i] > 0]
