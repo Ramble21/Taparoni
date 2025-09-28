@@ -103,7 +103,7 @@ def plane_to_delta(plane):
     else:
         raise ValueError(f"Invalid plane index {plane}")
 
-def decode_all_predictions(probs, fens):
+def decode_all_predictions(probs, boards):
     """
     Returns a list of tuples with every move and the probability that it is the "best" move
     If B > 1, returns a list of dictionaries for each
@@ -115,8 +115,7 @@ def decode_all_predictions(probs, fens):
 
     for b in range(B):
         nonzero = [i for i in sorted_idx[b].tolist() if probs[b, i] > 0]
-        fen = fens[b]
-        board = chess.Board(fen)
+        board = boards[b]
         white_to_move = board.turn == chess.WHITE
         moves = []
         for idx in nonzero:

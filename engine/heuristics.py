@@ -11,11 +11,12 @@ def material_val(piece):
         chess.KING: 0
     }
     return material_values[piece.piece_type]
-def fen_material_balance(fen):
+def fen_material_balance(fen=None, board=None):
     """
     Returns material balance in centipawns (e.g. -100 means Black up a pawn)
     """
-    board = chess.Board(fen)
+    if board is None:
+        board = chess.Board(fen)
     score = 0.0
     for sq, piece in board.piece_map().items():
         v = material_val(piece) if piece is not None else 0

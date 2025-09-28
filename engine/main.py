@@ -133,16 +133,46 @@ def graph(log, bucket_size, zero_y_axis=False, graph_type="loss", model_title="u
     plt.savefig(save_path)
     plt.close()
 
-def eval_fen(fen, model):
+def encode_board(board):
+    piece_to_pi_pychess = {
+        None: 0,  # empty
+        chess.PAWN: 1, chess.KNIGHT: 2, chess.BISHOP: 3,
+        chess.ROOK: 4, chess.QUEEN: 5, chess.KING: 6,
+    }
+    piece_to_ci_pychess = {
+        None: 0,  # empty
+        chess.WHITE: 1,
+        chess.BLACK: 2,
+    }
+
+    pieces_enc = []
+    colors_enc = []
+
+    for rank in range(7, -1, -1):  # 7 down to 0
+        for file in range(8):  # 0 up to 7
+            square = chess.square(file, rank)
+            piece = board.piece_at(square)
+            if piece is None:
+                pieces_enc.append(piece_to_pi_pychess[None])
+                colors_enc.append(piece_to_ci_pychess[None])
+            else:
+                pieces_enc.append(piece_to_pi_pychess[piece.piece_type])
+                colors_enc.append(piece_to_ci_pychess[piece.color])
+
+    ttm_enc = [0] if board.turn == chess.WHITE else [1]
+
+    pieces = torch.tensor(pieces_enc, dtype=torch.long, device=DEVICE)
+    colors = torch.tensor(colors_enc, dtype=torch.long, device=DEVICE)
+    ttm = torch.tensor(ttm_enc, dtype=torch.long, device=DEVICE)
+    return pieces, colors, ttm
+
+def eval_board(board, model):
+    pieces, colors, ttm = encode_board(board)
+
     model.eval()
     with torch.no_grad():
-        wnn = fen_to_wnn(fen)
-        pieces = torch.tensor(encode_pieces(wnn[:64]), dtype=torch.long, device=DEVICE)
-        colors = torch.tensor(encode_colors(wnn[:64]), dtype=torch.long, device=DEVICE)
-        ttm = torch.tensor(encode_ttm(wnn[64]), dtype=torch.long, device=DEVICE)
-        evaluation, pred_probs = model(pieces, colors, ttm, fen=fen, return_preds=True)
-
-        preds = decode_all_predictions(pred_probs, [fen])
+        evaluation, pred_probs = model(pieces, colors, ttm, board=board, return_preds=True)
+        preds = decode_all_predictions(pred_probs, [board])
         return 10 * evaluation.item(), preds
 
 def get_batch(split, size, return_fens=False):
@@ -163,14 +193,13 @@ def get_batch(split, size, return_fens=False):
         return pieces_batch, colors_batch, ttm_batch, eval_labels_batch, pred_labels_batch, index, batch_fens
     return pieces_batch, colors_batch, ttm_batch, eval_labels_batch, pred_labels_batch, index
 
-def get_fens_for_lmm(index, split):
+def get_boards_for_lmm(index, split):
     features_raw_x = features_raw_tr if split == 'train' else features_raw_dev
-    return [features_raw_x[i] for i in index.tolist()]
+    return [chess.Board(features_raw_x[i]) for i in index.tolist()]
 
-def get_legal_move_mask(fens):
-    mask = torch.zeros((len(fens), NUM_PLANES, 8, 8), dtype=torch.bool, device=DEVICE)
-    for i, fen in enumerate(fens):
-        board = chess.Board(fen)
+def get_legal_move_mask(boards):
+    mask = torch.zeros((len(boards), NUM_PLANES, 8, 8), dtype=torch.bool, device=DEVICE)
+    for i, board in enumerate(boards):
         white_to_move = board.turn == chess.WHITE
         for move in board.legal_moves:
             plane = move_to_plane(move, white_to_move)
@@ -179,12 +208,12 @@ def get_legal_move_mask(fens):
             mask[i, plane, fy, fx] = True
     return mask
 
-def compute_material_tensor(index, split, fen, batch_size):
-    if fen is None:
-        batch_fens = get_fens_for_lmm(index, split)
-        mats = [fen_material_balance(batch_fen) for batch_fen in batch_fens]
+def compute_material_tensor(index, split, board, batch_size):
+    if board is None:
+        batch_boards = get_boards_for_lmm(index, split)
+        mats = [fen_material_balance(board=batch_board) for batch_board in batch_boards]
     else:
-        mats = [fen_material_balance(fen)]
+        mats = [fen_material_balance(board=board)]
     mat_tensor = torch.tensor(mats, dtype=torch.float32, device=DEVICE).view(batch_size, 1)
     return mat_tensor / 10.0
 

@@ -23,8 +23,9 @@ NUM_SAMPLES = 5 # number of samples taken as a test after model training
 # Hyperparameters used at search time
 PRED_WEIGHT = 0.1 # weight that is assigned to the probabilities spit out by the model
 MODEL_DEPTH = 3 # minimax depth of the model
-MAX_LINES = 5 # maximum number of candidate moves selected, ignoring captures, checks, hanging pieces
+MAX_LINES = 8 # maximum number of candidate moves selected, ignoring captures, checks, hanging pieces
 HP_SN_MAX = 2 # maximum number of additional candidate moves given for moving a hanging piece
+ITER_DEEP_BONUS = 2 # raw multiplier to the prediction score for a move based off of it being first in the TT / iterative deepening backup
 QUIESCENCE_DEPTH = 2 # additional depth added for quiescence after captures
 MIN_MATERIAL = 10 # maximum material in which a position is considered 100% an endgame
 MAX_MATERIAL = 70 # minimum material in which endgame heuristics are completely ignored

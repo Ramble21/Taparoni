@@ -76,13 +76,13 @@ class TwoHeadTransformer(nn.Module):
         self.prediction_head = PredictionHead()
         self.evaluation_head = EvalHead()
 
-    def forward(self, pieces, colors, ttm, index=None, fen=None, eval_weight=0.5, pred_targets=None, eval_targets=None, return_preds=False, split='train'):
+    def forward(self, pieces, colors, ttm, index=None, board=None, eval_weight=0.5, pred_targets=None, eval_targets=None, return_preds=False, split='train'):
         from main import compute_material_tensor
         x = self.backbone(pieces, colors, ttm)
 
         # Add material balance to CLS token
         B, T, C = x.shape
-        material_tensor = compute_material_tensor(index, split, fen, B) # (B, 1)
+        material_tensor = compute_material_tensor(index, split, board, B) # (B, 1)
         material_emb = self.material_proj(material_tensor) # (B, C)
         x[:, 0, :] = x[:, 0, :] + material_emb
 
@@ -95,7 +95,7 @@ class TwoHeadTransformer(nn.Module):
             if index is not None:
                 pred_probs, pred_loss = self.prediction_head(x, index=index, targets=pred_targets, split=split)
             else:
-                pred_probs, pred_loss = self.prediction_head(x, fen=fen, targets=pred_targets, split=split)
+                pred_probs, pred_loss = self.prediction_head(x, board=board, targets=pred_targets, split=split)
 
         if return_preds:
             return evaluation, pred_probs
@@ -115,18 +115,18 @@ class PredictionHead(nn.Module):
         )
         self.head = nn.Conv2d(CONV_CHANNELS, NUM_PLANES, kernel_size=1)
 
-    def forward(self, x, index=None, fen=None, targets=None, split='train'):
-        from main import get_legal_move_mask, get_fens_for_lmm
+    def forward(self, x, index=None, board=None, targets=None, split='train'):
+        from main import get_legal_move_mask, get_boards_for_lmm
         # x -> (B,65,C), result of backbone.forward()
         B, T, C = x.shape
-        board = x[:, 1:, :] # remove CLS token, (B,64,C)
-        board = board.reshape(B, 8, 8, C).permute(0, 3, 1, 2) # (B,C,8,8)
-        h = self.trunk(board) # (B,C,8,8)
+        board_enc = x[:, 1:, :] # remove CLS token, (B,64,C)
+        board_enc = board_enc.reshape(B, 8, 8, C).permute(0, 3, 1, 2) # (B,C,8,8)
+        h = self.trunk(board_enc) # (B,C,8,8)
         logits = self.head(h) # (B,P,8,8)
 
         # Mask illegal moves
-        fens = get_fens_for_lmm(index, split) if index is not None else [fen]
-        plane_mask = get_legal_move_mask(fens)
+        boards = get_boards_for_lmm(index, split) if index is not None else [board]
+        plane_mask = get_legal_move_mask(boards)
 
         masked_logits = logits.masked_fill(~plane_mask, float('-inf')).to(DEVICE)
         logits_flat = masked_logits.flatten(1) # (B, P*8*8)
